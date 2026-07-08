@@ -507,6 +507,8 @@ function openEditModalForEntry(entry) {
   editingEntryId = entry.id;
   if (entry.type === "steps") {
     $("#stepsInput").value = entry.steps;
+    $("#stepsDate").max = getTodayStr();
+    $("#stepsDate").value = entry.date;
     $("#stepsModalTitle").textContent = "Изменить шаги ✏️";
     $("#saveStepsBtn").textContent = "Сохранить изменения";
     openModal("stepsModal");
@@ -514,36 +516,41 @@ function openEditModalForEntry(entry) {
     $("#workoutType").value = entry.workoutType;
     $("#workoutMinutes").value = entry.workoutMinutes;
     $("#workoutCalories").value = entry.workoutCalories || "";
+    $("#workoutDate").max = getTodayStr();
+    $("#workoutDate").value = entry.date;
     $("#workoutModalTitle").textContent = "Изменить тренировку ✏️";
     $("#saveWorkoutBtn").textContent = "Сохранить изменения";
     openModal("workoutModal");
   }
 }
 
-function updateStepsEntry(id, steps) {
+function updateStepsEntry(id, steps, date) {
   const entry = activities[currentUser.login] && activities[currentUser.login][id];
   if (!entry) return;
   entry.steps = steps;
   entry.points = pointsForSteps(steps);
-  if (useCloud) db.ref(`activities/${currentUser.login}/${id}`).update({ steps: entry.steps, points: entry.points });
+  entry.date = date || entry.date;
+  if (useCloud) db.ref(`activities/${currentUser.login}/${id}`).update({ steps: entry.steps, points: entry.points, date: entry.date });
   else persistLocal();
   showToast("✏️", "Запись обновлена!");
   renderHome();
 }
 
-function updateWorkoutEntry(id, type, minutes, calories) {
+function updateWorkoutEntry(id, type, minutes, calories, date) {
   const entry = activities[currentUser.login] && activities[currentUser.login][id];
   if (!entry) return;
   entry.workoutType = type;
   entry.workoutMinutes = minutes;
   entry.workoutCalories = calories || null;
   entry.points = pointsForWorkout(minutes);
+  entry.date = date || entry.date;
   if (useCloud) {
     db.ref(`activities/${currentUser.login}/${id}`).update({
       workoutType: entry.workoutType,
       workoutMinutes: entry.workoutMinutes,
       workoutCalories: entry.workoutCalories,
-      points: entry.points
+      points: entry.points,
+      date: entry.date
     });
   } else {
     persistLocal();
@@ -781,20 +788,20 @@ function renderProfile() {
 }
 
 // ---------- ACTIVITY ADDING ----------
-function addStepsEntry(steps) {
+function addStepsEntry(steps, date) {
   const before = new Set(computeAchievements(currentUser.login).filter((a) => a.unlocked).map((a) => a.id));
   const id = randomId();
-  const entry = { id, date: getTodayStr(), type: "steps", steps, points: pointsForSteps(steps), ts: Date.now() };
+  const entry = { id, date: date || getTodayStr(), type: "steps", steps, points: pointsForSteps(steps), ts: Date.now() };
   if (!activities[currentUser.login]) activities[currentUser.login] = {};
   activities[currentUser.login][id] = entry;
   if (useCloud) db.ref(`activities/${currentUser.login}/${id}`).set(entry);
   else persistLocal();
   afterAdd("steps", before);
 }
-function addWorkoutEntry(type, minutes, calories) {
+function addWorkoutEntry(type, minutes, calories, date) {
   const before = new Set(computeAchievements(currentUser.login).filter((a) => a.unlocked).map((a) => a.id));
   const id = randomId();
-  const entry = { id, date: getTodayStr(), type: "workout", workoutType: type, workoutMinutes: minutes, workoutCalories: calories || null, points: pointsForWorkout(minutes), ts: Date.now() };
+  const entry = { id, date: date || getTodayStr(), type: "workout", workoutType: type, workoutMinutes: minutes, workoutCalories: calories || null, points: pointsForWorkout(minutes), ts: Date.now() };
   if (!activities[currentUser.login]) activities[currentUser.login] = {};
   activities[currentUser.login][id] = entry;
   if (useCloud) db.ref(`activities/${currentUser.login}/${id}`).set(entry);
@@ -881,6 +888,8 @@ function wireEvents() {
     $("#stepsModalTitle").textContent = "Добавить шаги 🚶";
     $("#saveStepsBtn").textContent = "Сохранить";
     $("#stepsInput").value = "";
+    $("#stepsDate").max = getTodayStr();
+    $("#stepsDate").value = getTodayStr();
     openModal("stepsModal");
   });
   $("#openWorkoutModal").addEventListener("click", () => {
@@ -889,6 +898,8 @@ function wireEvents() {
     $("#saveWorkoutBtn").textContent = "Сохранить";
     $("#workoutMinutes").value = "";
     $("#workoutCalories").value = "";
+    $("#workoutDate").max = getTodayStr();
+    $("#workoutDate").value = getTodayStr();
     openModal("workoutModal");
   });
 
@@ -899,12 +910,13 @@ function wireEvents() {
   $("#saveStepsBtn").addEventListener("click", () => {
     const val = parseInt($("#stepsInput").value, 10);
     if (!val || val <= 0) return;
+    const date = $("#stepsDate").value || getTodayStr();
     closeModal("stepsModal");
     if (editingEntryId) {
-      updateStepsEntry(editingEntryId, val);
+      updateStepsEntry(editingEntryId, val, date);
       editingEntryId = null;
     } else {
-      addStepsEntry(val);
+      addStepsEntry(val, date);
     }
   });
 
@@ -914,12 +926,13 @@ function wireEvents() {
     if (!minutes || minutes <= 0) return;
     const caloriesRaw = parseInt($("#workoutCalories").value, 10);
     const calories = caloriesRaw > 0 ? caloriesRaw : null;
+    const date = $("#workoutDate").value || getTodayStr();
     closeModal("workoutModal");
     if (editingEntryId) {
-      updateWorkoutEntry(editingEntryId, type, minutes, calories);
+      updateWorkoutEntry(editingEntryId, type, minutes, calories, date);
       editingEntryId = null;
     } else {
-      addWorkoutEntry(type, minutes, calories);
+      addWorkoutEntry(type, minutes, calories, date);
     }
   });
 
