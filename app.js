@@ -284,6 +284,12 @@ function buildBuckets(login, period, metric) {
   };
 }
 
+function metricLabel(metric) {
+  if (metric === "steps") return "Шаги";
+  if (metric === "workouts") return "Минуты тренировок";
+  return "Очки";
+}
+
 function computeTotals(login) {
   const list = Object.values(activities[login] || {});
   const agg = dailyAggregates(login);
@@ -565,25 +571,23 @@ function deleteEntry(id) {
 function renderWeekChart() {
   const canvas = $("#weekChart");
   if (!canvas || typeof Chart === "undefined") return;
-  let labels = [];
-  const datasets = USERS.map((u) => {
-    const bucket = buildBuckets(u.login, chartPeriod, chartMetric);
-    labels = bucket.labels;
-    return {
-      label: u.name,
-      data: bucket.values,
-      backgroundColor: u.color,
-      borderRadius: 6,
-      maxBarThickness: 18
-    };
-  });
+  const { labels, values } = buildBuckets(currentUser.login, chartPeriod, chartMetric);
   if (weekChartInstance) weekChartInstance.destroy();
   weekChartInstance = new Chart(canvas.getContext("2d"), {
     type: "bar",
-    data: { labels, datasets },
+    data: {
+      labels,
+      datasets: [{
+        label: metricLabel(chartMetric),
+        data: values,
+        backgroundColor: currentUser.color || "#2FD9C4",
+        borderRadius: 8,
+        maxBarThickness: 26
+      }]
+    },
     options: {
       responsive: true,
-      plugins: { legend: { position: "bottom", labels: { color: "#F4F5F7", boxWidth: 10, font: { size: 11 } } } },
+      plugins: { legend: { display: false } },
       scales: {
         x: { grid: { display: false }, ticks: { color: "#9AA0B2" } },
         y: { grid: { color: "#232838" }, ticks: { color: "#9AA0B2" } }
