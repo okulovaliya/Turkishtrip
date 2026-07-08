@@ -90,7 +90,19 @@
       </div>
 
       <div class="card">
-        <div class="card-title">Шаги за неделю</div>
+        <div class="card-title">Статистика</div>
+        <div class="chart-controls">
+          <div class="segmented" id="metricSegmented">
+            <button class="seg-btn active" type="button" data-metric="steps">Шаги</button>
+            <button class="seg-btn" type="button" data-metric="workouts">Тренировки</button>
+            <button class="seg-btn" type="button" data-metric="points">Очки</button>
+          </div>
+          <div class="segmented segmented-sm" id="periodSegmented">
+            <button class="seg-btn active" type="button" data-period="day">День</button>
+            <button class="seg-btn" type="button" data-period="week">Неделя</button>
+            <button class="seg-btn" type="button" data-period="month">Месяц</button>
+          </div>
+        </div>
         <canvas id="weekChart" height="160"></canvas>
       </div>
 
@@ -115,7 +127,19 @@
       </header>
 
       <div class="card">
-        <div class="card-title">Общий прогресс до поездки</div>
+        <div class="card-title">Статистика команды</div>
+        <div class="chart-controls">
+          <div class="segmented" id="teamMetricSegmented">
+            <button class="seg-btn active" type="button" data-metric="steps">Шаги</button>
+            <button class="seg-btn" type="button" data-metric="workouts">Тренировки</button>
+            <button class="seg-btn" type="button" data-metric="points">Очки</button>
+          </div>
+          <div class="segmented segmented-sm" id="teamPeriodSegmented">
+            <button class="seg-btn active" type="button" data-period="day">День</button>
+            <button class="seg-btn" type="button" data-period="week">Неделя</button>
+            <button class="seg-btn" type="button" data-period="month">Месяц</button>
+          </div>
+        </div>
         <canvas id="teamChart" height="180"></canvas>
       </div>
 

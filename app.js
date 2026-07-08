@@ -79,6 +79,10 @@ let editingEntryId = null;
 let currentTab = "home";
 let useCloud = false;
 let db = null;
+let chartMetric = "steps";
+let chartPeriod = "day";
+let teamChartMetric = "steps";
+let teamChartPeriod = "day";
 
 // ---------- UTIL ----------
 const $ = (sel) => document.querySelector(sel);
@@ -219,14 +223,70 @@ function rerenderCurrentTab() {
 function dailyAggregates(login) {
   const map = {};
   Object.values(activities[login] || {}).forEach((e) => {
-    if (!map[e.date]) map[e.date] = { steps: 0, workoutMinutes: 0, workouts: [] };
+    if (!map[e.date]) map[e.date] = { steps: 0, workoutMinutes: 0, points: 0, workouts: [] };
     if (e.type === "steps") map[e.date].steps += e.steps;
     if (e.type === "workout") {
       map[e.date].workoutMinutes += e.workoutMinutes;
       map[e.date].workouts.push({ type: e.workoutType, minutes: e.workoutMinutes });
     }
+    map[e.date].points += e.points || 0;
   });
   return map;
+}
+
+// Builds chart-ready {labels, values} buckets for a metric ("steps" | "workouts" | "points")
+// over a period granularity ("day" -> last 7 days, "week" -> last 8 weeks, "month" -> last 6 months).
+function buildBuckets(login, period, metric) {
+  const agg = dailyAggregates(login);
+  const metricKey = metric === "steps" ? "steps" : metric === "workouts" ? "workoutMinutes" : "points";
+
+  if (period === "week") {
+    const labels = [], values = [];
+    const today = startOfDay(new Date());
+    for (let w = 7; w >= 0; w--) {
+      const end = new Date(today);
+      end.setDate(end.getDate() - w * 7);
+      const start = new Date(end);
+      start.setDate(start.getDate() - 6);
+      let sum = 0;
+      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+        const ds = formatDate(d);
+        if (agg[ds]) sum += agg[ds][metricKey];
+      }
+      labels.push(`${pad(start.getDate())}.${pad(start.getMonth() + 1)}`);
+      values.push(sum);
+    }
+    return { labels, values };
+  }
+
+  if (period === "month") {
+    const labels = [], values = [];
+    const today = new Date();
+    for (let m = 5; m >= 0; m--) {
+      const d = new Date(today.getFullYear(), today.getMonth() - m, 1);
+      let sum = 0;
+      Object.keys(agg).forEach((ds) => {
+        const dd = new Date(ds + "T00:00:00");
+        if (dd.getFullYear() === d.getFullYear() && dd.getMonth() === d.getMonth()) sum += agg[ds][metricKey];
+      });
+      labels.push(d.toLocaleDateString("ru-RU", { month: "short" }).replace(".", ""));
+      values.push(sum);
+    }
+    return { labels, values };
+  }
+
+  // day (default): last 7 individual days
+  const dates = getLastNDates(7);
+  return {
+    labels: dates.map(dayLabel),
+    values: dates.map((d) => (agg[d] ? agg[d][metricKey] : 0))
+  };
+}
+
+function metricLabel(metric) {
+  if (metric === "steps") return "Шаги";
+  if (metric === "workouts") return "Минуты тренировок";
+  return "Очки";
 }
 
 function computeTotals(login) {
@@ -459,16 +519,14 @@ function deleteEntry(id) {
 function renderWeekChart() {
   const canvas = $("#weekChart");
   if (!canvas || typeof Chart === "undefined") return;
-  const dates = getLastNDates(7);
-  const agg = dailyAggregates(currentUser.login);
-  const values = dates.map((d) => (agg[d] ? agg[d].steps : 0));
+  const { labels, values } = buildBuckets(currentUser.login, chartPeriod, chartMetric);
   if (weekChartInstance) weekChartInstance.destroy();
   weekChartInstance = new Chart(canvas.getContext("2d"), {
     type: "bar",
     data: {
-      labels: dates.map(dayLabel),
+      labels,
       datasets: [{
-        label: "Шаги",
+        label: metricLabel(chartMetric),
         data: values,
         backgroundColor: currentUser.color || "#2FD9C4",
         borderRadius: 8,
@@ -592,13 +650,14 @@ function toggleReaction(itemId, emoji) {
 // ---------- RENDER: TEAM ----------
 function renderTeam() {
   const canvas = $("#teamChart");
-  const dates = getLastNDates(7);
   if (canvas && typeof Chart !== "undefined") {
+    let labels = [];
     const datasets = USERS.map((u) => {
-      const agg = dailyAggregates(u.login);
+      const bucket = buildBuckets(u.login, teamChartPeriod, teamChartMetric);
+      labels = bucket.labels;
       return {
         label: u.name,
-        data: dates.map((d) => (agg[d] ? agg[d].steps : 0)),
+        data: bucket.values,
         backgroundColor: u.color,
         borderRadius: 6,
         maxBarThickness: 18
@@ -607,7 +666,7 @@ function renderTeam() {
     if (teamChartInstance) teamChartInstance.destroy();
     teamChartInstance = new Chart(canvas.getContext("2d"), {
       type: "bar",
-      data: { labels: dates.map(dayLabel), datasets },
+      data: { labels, datasets },
       options: {
         responsive: true,
         plugins: { legend: { position: "bottom", labels: { color: "#F4F5F7", boxWidth: 10, font: { size: 11 } } } },
@@ -836,6 +895,22 @@ function wireEvents() {
       e.preventDefault();
       addCommentFromItem(e.target.closest(".feed-item"));
     }
+  });
+
+  wireSegmented("#metricSegmented", "metric", (val) => { chartMetric = val; renderWeekChart(); });
+  wireSegmented("#periodSegmented", "period", (val) => { chartPeriod = val; renderWeekChart(); });
+  wireSegmented("#teamMetricSegmented", "metric", (val) => { teamChartMetric = val; renderTeam(); });
+  wireSegmented("#teamPeriodSegmented", "period", (val) => { teamChartPeriod = val; renderTeam(); });
+}
+
+function wireSegmented(containerSel, dataAttr, onChange) {
+  const container = $(containerSel);
+  if (!container) return;
+  container.querySelectorAll(".seg-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      container.querySelectorAll(".seg-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      onChange(btn.dataset[dataAttr]);
+    });
   });
 }
 
