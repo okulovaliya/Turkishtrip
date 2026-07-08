@@ -120,7 +120,19 @@ function computeDaysLeft() {
   return Math.ceil((trip - today) / 86400000);
 }
 function pointsForSteps(steps) { return Math.round(steps / 100); }
-function pointsForWorkout(min) { return min * 2; }
+// Points per minute by workout type, roughly proportional to intensity (MET).
+const WORKOUT_POINT_RATES = {
+  "Кардио": 3,
+  "Плавание": 3,
+  "Силовая": 2.5,
+  "Танцы": 2,
+  "Прогулка": 1.5,
+  "Йога": 1.5
+};
+function pointsForWorkout(min, type) {
+  const rate = WORKOUT_POINT_RATES[type] ?? 2;
+  return Math.round(min * rate);
+}
 function randomId() { return Date.now() + "-" + Math.random().toString(36).slice(2, 8); }
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 function nf(n) { return Number(n || 0).toLocaleString("ru-RU"); }
@@ -542,7 +554,7 @@ function updateWorkoutEntry(id, type, minutes, calories, date) {
   entry.workoutType = type;
   entry.workoutMinutes = minutes;
   entry.workoutCalories = calories || null;
-  entry.points = pointsForWorkout(minutes);
+  entry.points = pointsForWorkout(minutes, type);
   entry.date = date || entry.date;
   if (useCloud) {
     db.ref(`activities/${currentUser.login}/${id}`).update({
@@ -801,7 +813,7 @@ function addStepsEntry(steps, date) {
 function addWorkoutEntry(type, minutes, calories, date) {
   const before = new Set(computeAchievements(currentUser.login).filter((a) => a.unlocked).map((a) => a.id));
   const id = randomId();
-  const entry = { id, date: date || getTodayStr(), type: "workout", workoutType: type, workoutMinutes: minutes, workoutCalories: calories || null, points: pointsForWorkout(minutes), ts: Date.now() };
+  const entry = { id, date: date || getTodayStr(), type: "workout", workoutType: type, workoutMinutes: minutes, workoutCalories: calories || null, points: pointsForWorkout(minutes, type), ts: Date.now() };
   if (!activities[currentUser.login]) activities[currentUser.login] = {};
   activities[currentUser.login][id] = entry;
   if (useCloud) db.ref(`activities/${currentUser.login}/${id}`).set(entry);
