@@ -31,8 +31,8 @@
         <input type="password" id="passwordInput" autocomplete="current-password" placeholder="••••••••" required>
       </label>
       <p id="loginError" class="login-error" hidden></p>
-      <button type="submit" class="btn btn-primary btn-block">Войти ✈️</button>
-      <p class="login-hint">Доступ по данным из <code>users.json</code></p>
+      <button type="submit" class="btn btn-primary btn-block" id="loginSubmitBtn">Войти ✈️</button>
+      <p class="login-hint" id="loginHint">Первый вход — придумайте пароль (от 6 символов), дальше входите с ним же.</p>
     </form>
   </section>
 
@@ -246,6 +246,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
 <script src="firebase-config.js"></script>
 <script src="app.js"></script>
 </body>

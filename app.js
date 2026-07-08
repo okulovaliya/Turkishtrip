@@ -7,10 +7,11 @@ const TRIP_DATE = new Date('2026-08-28T00:00:00');
 const DAILY_STEP_GOAL = 8000;
 
 // Fallback copy of users.json in case fetch fails (e.g. opened via file://)
+// No passwords are stored anywhere — Firebase Authentication owns those.
 const FALLBACK_USERS = [
-  { login: "tanya",  password: "turkey2026", name: "Танюшка",     avatar: "🌴", color: "#FF7A59" },
-  { login: "lilu",   password: "turkey2026", name: "Лилу",        avatar: "🍹", color: "#2FD9C4" },
-  { login: "nastya", password: "turkey2026", name: "Анастасися",  avatar: "☀️", color: "#FFC93C" }
+  { login: "tanya",  email: "tanya@turkeytrip.app",  name: "Танюшка",     avatar: "🌴", color: "#FF7A59" },
+  { login: "lilu",   email: "lilu@turkeytrip.app",   name: "Лилу",        avatar: "🍹", color: "#2FD9C4" },
+  { login: "nastya", email: "nastya@turkeytrip.app", name: "Анастасися",  avatar: "☀️", color: "#FFC93C" }
 ];
 
 const MOTIVATION_STEPS = [
@@ -283,12 +284,6 @@ function buildBuckets(login, period, metric) {
   };
 }
 
-function metricLabel(metric) {
-  if (metric === "steps") return "Шаги";
-  if (metric === "workouts") return "Минуты тренировок";
-  return "Очки";
-}
-
 function computeTotals(login) {
   const list = Object.values(activities[login] || {});
   const agg = dailyAggregates(login);
@@ -353,15 +348,66 @@ function computeAchievements(login) {
 }
 
 // ---------- AUTH ----------
-function tryLogin(login, password) {
-  const clean = login.trim().toLowerCase();
-  const user = USERS.find((u) => u.login.toLowerCase() === clean && u.password === password);
-  if (!user) return false;
-  currentUser = user;
-  localStorage.setItem("tc_session", user.login);
-  return true;
+// No passwords are ever stored in a file. When Firebase is configured, real
+// authentication happens through Firebase Authentication: the first time
+// someone logs in with a given name, that password is registered for her
+// (Firebase hashes and stores it securely); every login after that verifies
+// against Firebase, never against anything we control.
+function firebaseAuthErrorText(err) {
+  const map = {
+    "auth/weak-password": "Пароль должен быть не короче 6 символов.",
+    "auth/invalid-email": "Некорректный логин.",
+    "auth/too-many-requests": "Слишком много попыток входа, попробуйте чуть позже.",
+    "auth/network-request-failed": "Нет соединения с сервером.",
+    "auth/user-disabled": "Этот аккаунт отключён."
+  };
+  return (err && map[err.code]) || "Не удалось войти. Попробуйте ещё раз.";
 }
+
+async function attemptLogin(loginRaw, password) {
+  const clean = loginRaw.trim().toLowerCase();
+  const user = USERS.find((u) => u.login.toLowerCase() === clean);
+  if (!user) return { ok: false, error: "Такой участницы нет в списке." };
+
+  if (!useCloud) {
+    // Local demo mode (Firebase not configured yet) — no password is stored
+    // anywhere, so anyone can sign in as any known name on this one device.
+    currentUser = user;
+    return { ok: true };
+  }
+
+  const email = user.email || `${user.login}@turkeytrip.app`;
+
+  try {
+    try {
+      await firebase.auth().signInWithEmailAndPassword(email, password);
+      currentUser = user;
+      return { ok: true };
+    } catch (signInErr) {
+      // Not registered yet (or signIn failed for another reason) — try to
+      // register. If registration says the email is already in use, the
+      // account exists and the original failure really was a wrong password.
+      try {
+        await firebase.auth().createUserWithEmailAndPassword(email, password);
+        currentUser = user;
+        return { ok: true };
+      } catch (signUpErr) {
+        if (signUpErr.code === "auth/email-already-in-use") {
+          return { ok: false, error: "Неверный пароль." };
+        }
+        return { ok: false, error: firebaseAuthErrorText(signUpErr) };
+      }
+    }
+  } catch (fatalErr) {
+    // firebase.auth() itself threw (e.g. SDK blocked/failed to load) — never
+    // leave the login button stuck, surface a clear message instead.
+    console.warn("Firebase Auth недоступен:", fatalErr);
+    return { ok: false, error: "Не удалось связаться с сервером входа. Проверьте соединение и попробуйте ещё раз." };
+  }
+}
+
 function logout() {
+  if (useCloud && firebase.auth().currentUser) firebase.auth().signOut();
   currentUser = null;
   localStorage.removeItem("tc_session");
   $("#appScreen").hidden = true;
@@ -519,23 +565,25 @@ function deleteEntry(id) {
 function renderWeekChart() {
   const canvas = $("#weekChart");
   if (!canvas || typeof Chart === "undefined") return;
-  const { labels, values } = buildBuckets(currentUser.login, chartPeriod, chartMetric);
+  let labels = [];
+  const datasets = USERS.map((u) => {
+    const bucket = buildBuckets(u.login, chartPeriod, chartMetric);
+    labels = bucket.labels;
+    return {
+      label: u.name,
+      data: bucket.values,
+      backgroundColor: u.color,
+      borderRadius: 6,
+      maxBarThickness: 18
+    };
+  });
   if (weekChartInstance) weekChartInstance.destroy();
   weekChartInstance = new Chart(canvas.getContext("2d"), {
     type: "bar",
-    data: {
-      labels,
-      datasets: [{
-        label: metricLabel(chartMetric),
-        data: values,
-        backgroundColor: currentUser.color || "#2FD9C4",
-        borderRadius: 8,
-        maxBarThickness: 26
-      }]
-    },
+    data: { labels, datasets },
     options: {
       responsive: true,
-      plugins: { legend: { display: false } },
+      plugins: { legend: { position: "bottom", labels: { color: "#F4F5F7", boxWidth: 10, font: { size: 11 } } } },
       scales: {
         x: { grid: { display: false }, ticks: { color: "#9AA0B2" } },
         y: { grid: { color: "#232838" }, ticks: { color: "#9AA0B2" } }
@@ -797,16 +845,22 @@ function showApp() {
 }
 
 function wireEvents() {
-  $("#loginForm").addEventListener("submit", (e) => {
+  $("#loginForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     const login = $("#loginInput").value;
     const password = $("#passwordInput").value;
-    const ok = tryLogin(login, password);
-    if (ok) {
+    const btn = $("#loginSubmitBtn");
+    btn.disabled = true;
+    btn.textContent = "Входим...";
+    const result = await attemptLogin(login, password);
+    btn.disabled = false;
+    btn.textContent = "Войти ✈️";
+    if (result.ok) {
       $("#loginError").hidden = true;
+      if (!useCloud) localStorage.setItem("tc_session", currentUser.login);
       showApp();
     } else {
-      $("#loginError").textContent = "Неверный логин или пароль. Проверь users.json 🙈";
+      $("#loginError").textContent = result.error;
       $("#loginError").hidden = false;
     }
   });
@@ -919,6 +973,27 @@ async function init() {
   initStorage();
   wireEvents();
 
+  const hint = $("#loginHint");
+  if (hint) {
+    hint.textContent = useCloud
+      ? "Первый вход — придумайте пароль (от 6 символов), дальше входите с ним же."
+      : "⚠️ Firebase не настроен — вход без пароля, только на этом устройстве (демо-режим).";
+  }
+
+  if (useCloud && typeof firebase !== "undefined" && firebase.auth) {
+    // Firebase persists its own session — restore it automatically if present.
+    firebase.auth().onAuthStateChanged((fbUser) => {
+      if (fbUser && fbUser.email && !currentUser) {
+        const login = fbUser.email.split("@")[0];
+        const u = USERS.find((x) => x.login === login);
+        if (u) { currentUser = u; showApp(); }
+      }
+    });
+    $("#loginScreen").hidden = false;
+    return;
+  }
+
+  // Local demo mode: no Firebase, fall back to remembering the last login on this device.
   const savedLogin = localStorage.getItem("tc_session");
   if (savedLogin) {
     const u = USERS.find((x) => x.login === savedLogin);
