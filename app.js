@@ -73,6 +73,7 @@ let currentUser = null;
 let activities = {}; // login -> { entryId: {id, date, type, steps?, workoutType?, workoutMinutes?, points, ts} }
 let comments = {}; // activityId -> { commentId: {login, name, text, ts} }
 let reactions = {}; // activityId -> { emoji: { login: true } }
+let profiles = {}; // login -> { name?, avatar?, dailyGoal? } — user-editable overrides
 let weekChartInstance = null;
 let teamChartInstance = null;
 let toastTimer = null;
@@ -183,6 +184,8 @@ function initStorage() {
     useCloud = false;
   }
 
+  applyProfileOverrides(); // make sure every user has a dailyGoal right away
+
   if (useCloud) {
     db.ref("activities").on("value", (snap) => {
       activities = snap.val() || {};
@@ -197,6 +200,11 @@ function initStorage() {
       reactions = snap.val() || {};
       rerenderCurrentTab();
     });
+    db.ref("profiles").on("value", (snap) => {
+      profiles = snap.val() || {};
+      applyProfileOverrides();
+      rerenderCurrentTab();
+    });
   } else {
     loadLocalFallback();
   }
@@ -208,11 +216,29 @@ function ensureUserBuckets() {
   });
 }
 
+// Merges saved name/avatar/dailyGoal overrides onto the in-memory USERS
+// objects, so every other render just reads user.name/.avatar/.dailyGoal
+// like normal — no extra lookup needed anywhere else in the app.
+function applyProfileOverrides() {
+  USERS.forEach((u) => {
+    const o = profiles[u.login];
+    if (o) {
+      if (o.name) u.name = o.name;
+      if (o.avatar) u.avatar = o.avatar;
+      u.dailyGoal = o.dailyGoal || DAILY_STEP_GOAL;
+    } else {
+      u.dailyGoal = u.dailyGoal || DAILY_STEP_GOAL;
+    }
+  });
+}
+
 function loadLocalFallback() {
   try { activities = JSON.parse(localStorage.getItem("tc_activities") || "{}"); } catch (e) { activities = {}; }
   try { comments = JSON.parse(localStorage.getItem("tc_comments") || "{}"); } catch (e) { comments = {}; }
   try { reactions = JSON.parse(localStorage.getItem("tc_reactions") || "{}"); } catch (e) { reactions = {}; }
+  try { profiles = JSON.parse(localStorage.getItem("tc_profiles") || "{}"); } catch (e) { profiles = {}; }
   ensureUserBuckets();
+  applyProfileOverrides();
 }
 
 // Only used in local (non-cloud) fallback mode — cloud writes persist per-call.
@@ -221,6 +247,15 @@ function persistLocal() {
   localStorage.setItem("tc_activities", JSON.stringify(activities));
   localStorage.setItem("tc_comments", JSON.stringify(comments));
   localStorage.setItem("tc_reactions", JSON.stringify(reactions));
+  localStorage.setItem("tc_profiles", JSON.stringify(profiles));
+}
+
+function saveProfile(login, patch) {
+  if (!profiles[login]) profiles[login] = {};
+  Object.assign(profiles[login], patch);
+  applyProfileOverrides();
+  if (useCloud) db.ref(`profiles/${login}`).update(patch);
+  else persistLocal();
 }
 
 function rerenderCurrentTab() {
@@ -453,15 +488,16 @@ function renderHome() {
   $("#motivationEmoji").textContent = motivation.emoji;
   $("#motivationText").textContent = motivation.text;
 
+  const myGoal = currentUser.dailyGoal || DAILY_STEP_GOAL;
   const agg = dailyAggregates(currentUser.login);
   const todaySteps = (agg[getTodayStr()] && agg[getTodayStr()].steps) || 0;
-  const frac = Math.max(0, Math.min(1, todaySteps / DAILY_STEP_GOAL));
+  const frac = Math.max(0, Math.min(1, todaySteps / myGoal));
   const circumference = 540;
   $("#ringProgress").style.strokeDashoffset = String(circumference * (1 - frac));
   $("#ringValue").textContent = nf(todaySteps);
-  $("#ringGoal").textContent = `цель: ${nf(DAILY_STEP_GOAL)}`;
+  $("#ringGoal").textContent = `цель: ${nf(myGoal)}`;
 
-  const teamGoal = DAILY_STEP_GOAL * USERS.length;
+  const teamGoal = USERS.reduce((sum, u) => sum + (u.dailyGoal || DAILY_STEP_GOAL), 0);
   const team = computeTeamTotals();
   const teamFrac = Math.max(0, Math.min(1, team.todaySteps / teamGoal));
   $("#teamBarFill").style.width = (teamFrac * 100) + "%";
@@ -788,6 +824,7 @@ function renderProfile() {
   $("#profileAvatar").textContent = currentUser.avatar;
   $("#profileName").textContent = currentUser.name;
   $("#profileLogin").textContent = "@" + currentUser.login;
+  $("#profileGoal").textContent = `цель: ${nf(currentUser.dailyGoal || DAILY_STEP_GOAL)} шагов/день`;
   const badge = $("#syncBadge");
   badge.textContent = useCloud ? "☁️ синхронизировано со всеми" : "📱 только на этом устройстве";
   badge.classList.toggle("cloud", useCloud);
@@ -991,6 +1028,36 @@ function wireEvents() {
     const willOpen = body.hidden;
     body.hidden = !willOpen;
     chevron.classList.toggle("open", willOpen);
+  });
+
+  $("#editProfileBtn").addEventListener("click", () => {
+    $("#profileNameInput").value = currentUser.name;
+    $("#profileGoalInput").value = currentUser.dailyGoal || DAILY_STEP_GOAL;
+    document.querySelectorAll("#avatarGrid .avatar-choice").forEach((btn) => {
+      btn.classList.toggle("selected", btn.dataset.avatar === currentUser.avatar);
+    });
+    openModal("profileModal");
+  });
+
+  $("#avatarGrid").addEventListener("click", (e) => {
+    const btn = e.target.closest(".avatar-choice");
+    if (!btn) return;
+    document.querySelectorAll("#avatarGrid .avatar-choice").forEach((b) => b.classList.remove("selected"));
+    btn.classList.add("selected");
+  });
+
+  $("#saveProfileBtn").addEventListener("click", () => {
+    const name = $("#profileNameInput").value.trim();
+    if (!name) return;
+    const selectedAvatarBtn = $("#avatarGrid .avatar-choice.selected");
+    const avatar = selectedAvatarBtn ? selectedAvatarBtn.dataset.avatar : currentUser.avatar;
+    let goal = parseInt($("#profileGoalInput").value, 10);
+    if (!goal || goal < 1000) goal = DAILY_STEP_GOAL;
+    if (goal > 30000) goal = 30000;
+    closeModal("profileModal");
+    saveProfile(currentUser.login, { name, avatar, dailyGoal: goal });
+    showToast("✏️", "Профиль обновлён!");
+    rerenderCurrentTab();
   });
 }
 

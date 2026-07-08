@@ -182,6 +182,7 @@
         <div class="avatar avatar-lg" id="profileAvatar">🌴</div>
         <div class="profile-name" id="profileName">—</div>
         <div class="profile-sub" id="profileLogin">—</div>
+        <div class="profile-goal" id="profileGoal">цель: — шагов/день</div>
         <div class="sync-badge" id="syncBadge">—</div>
       </div>
 
@@ -204,6 +205,7 @@
         </div>
       </div>
 
+      <button class="btn btn-secondary btn-block" id="editProfileBtn">Изменить профиль</button>
       <button class="btn btn-secondary btn-block" id="logoutBtn2">Выйти из аккаунта</button>
     </div>
 
@@ -254,6 +256,46 @@
       <div class="modal-actions">
         <button class="btn btn-secondary" data-close="workoutModal">Отмена</button>
         <button class="btn btn-primary" id="saveWorkoutBtn">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- PROFILE EDIT MODAL -->
+  <div class="modal-backdrop" id="profileModal" hidden>
+    <div class="modal">
+      <div class="modal-title">Изменить профиль ✏️</div>
+
+      <label class="field">
+        <span>Аватар</span>
+        <div class="avatar-grid" id="avatarGrid">
+          <button type="button" class="avatar-choice" data-avatar="🌴">🌴</button>
+          <button type="button" class="avatar-choice" data-avatar="🍹">🍹</button>
+          <button type="button" class="avatar-choice" data-avatar="☀️">☀️</button>
+          <button type="button" class="avatar-choice" data-avatar="🏖️">🏖️</button>
+          <button type="button" class="avatar-choice" data-avatar="🐬">🐬</button>
+          <button type="button" class="avatar-choice" data-avatar="🦩">🦩</button>
+          <button type="button" class="avatar-choice" data-avatar="🍉">🍉</button>
+          <button type="button" class="avatar-choice" data-avatar="🌺">🌺</button>
+          <button type="button" class="avatar-choice" data-avatar="🕶️">🕶️</button>
+          <button type="button" class="avatar-choice" data-avatar="🦋">🦋</button>
+          <button type="button" class="avatar-choice" data-avatar="🍸">🍸</button>
+          <button type="button" class="avatar-choice" data-avatar="🌊">🌊</button>
+        </div>
+      </label>
+
+      <label class="field">
+        <span>Имя</span>
+        <input type="text" id="profileNameInput" class="modal-input" placeholder="Ваше имя" maxlength="30">
+      </label>
+
+      <label class="field">
+        <span>Цель по шагам в день</span>
+        <input type="number" id="profileGoalInput" class="modal-input" placeholder="Например, 8000" min="1000" max="30000" step="500">
+      </label>
+
+      <div class="modal-actions">
+        <button class="btn btn-secondary" data-close="profileModal">Отмена</button>
+        <button class="btn btn-primary" id="saveProfileBtn">Сохранить</button>
       </div>
     </div>
   </div>
