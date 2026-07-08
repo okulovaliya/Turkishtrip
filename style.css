@@ -1,4 +1,5 @@
 :root {
+  color-scheme: dark;
   --bg: #0B0D14;
   --bg-2: #12151F;
   --card: #171B27;
@@ -102,6 +103,34 @@ body {
   outline: none;
 }
 .field input:focus, .modal-input:focus { border-color: var(--teal); }
+
+/* Native <input type="date"> — force dark color-scheme so the browser's own
+   calendar dropdown renders dark instead of stark white, and re-tint the
+   picker icon (browsers draw it near-black by default, invisible here). */
+input[type="date"] {
+  color-scheme: dark;
+  position: relative;
+  padding-right: 44px;
+  /* Draw our own white calendar glyph as a background image — this is
+     guaranteed to render white regardless of how a given browser draws
+     (and refuses to let us re-tint) its own native picker icon. */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23F4F5F7' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='5' width='18' height='16' rx='2'/%3E%3Cline x1='16' y1='3' x2='16' y2='7'/%3E%3Cline x1='8' y1='3' x2='8' y2='7'/%3E%3Cline x1='3' y1='10' x2='21' y2='10'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  background-size: 18px;
+}
+/* Hide (but keep clickable) the browser's own dark icon on top of ours, in
+   browsers that expose it — Chrome, Edge, Safari. */
+input[type="date"]::-webkit-calendar-picker-indicator {
+  opacity: 0;
+  cursor: pointer;
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 44px;
+  height: 100%;
+  margin: 0;
+}
 
 .login-error {
   color: var(--danger);
