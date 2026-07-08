@@ -1,21 +1,21 @@
 [
   {
     "login": "tanya",
-    "password": "turkey2026",
+    "email": "tanya@turkeytrip.app",
     "name": "Танюшка",
     "avatar": "🌴",
     "color": "#FF7A59"
   },
   {
     "login": "lilu",
-    "password": "turkey2026",
+    "email": "lilu@turkeytrip.app",
     "name": "Лилу",
     "avatar": "🍹",
     "color": "#2FD9C4"
   },
   {
     "login": "nastya",
-    "password": "turkey2026",
+    "email": "nastya@turkeytrip.app",
     "name": "Анастасися",
     "avatar": "☀️",
     "color": "#FFC93C"
