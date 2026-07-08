@@ -455,6 +455,27 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .team-row .tr-points { font-weight: 800; color: var(--gold); font-size: 15px; }
 
 .info-card { background: var(--bg-2); border-color: var(--card-border); }
+.info-card-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.info-card-toggle .card-title { margin-bottom: 0; }
+.info-card-chevron {
+  font-size: 16px;
+  color: var(--text-dim);
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+  margin-left: 10px;
+}
+.info-card-chevron.open { transform: rotate(180deg); }
+.info-card-body { margin-top: 12px; }
 .points-info-row {
   display: flex;
   justify-content: space-between;
