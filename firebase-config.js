@@ -1,10 +1,3 @@
-/*
-  Firebase выдаёт этот блок в формате "модульного" SDK (import { initializeApp }...),
-  но app.js в этом проекте использует более простой "compat" SDK (подключается через
-  обычные <script> теги в index.html, без import/бандлера). Поэтому здесь оставлен
-  только объект firebaseConfig — само подключение (firebase.initializeApp(...))
-  app.js делает самостоятельно.
-*/
 const firebaseConfig = {
   apiKey: "AIzaSyCq9Zzpr6_CSKZ-dHYz2J2Sixy5Qe1Pe2I",
   authDomain: "turkish-trip-26.firebaseapp.com",
