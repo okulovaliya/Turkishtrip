@@ -984,6 +984,14 @@ function wireEvents() {
   wireSegmented("#periodSegmented", "period", (val) => { chartPeriod = val; renderWeekChart(); });
   wireSegmented("#teamMetricSegmented", "metric", (val) => { teamChartMetric = val; renderTeam(); });
   wireSegmented("#teamPeriodSegmented", "period", (val) => { teamChartPeriod = val; renderTeam(); });
+
+  $("#pointsInfoToggle").addEventListener("click", () => {
+    const body = $("#pointsInfoBody");
+    const chevron = $("#pointsInfoChevron");
+    const willOpen = body.hidden;
+    body.hidden = !willOpen;
+    chevron.classList.toggle("open", willOpen);
+  });
 }
 
 function wireSegmented(containerSel, dataAttr, onChange) {
