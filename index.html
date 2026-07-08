@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Turkey Challenge 🌴</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="phone">
+
+  <!-- ===== LOGIN SCREEN ===== -->
+  <section id="loginScreen" class="screen login-screen">
+    <div class="login-bg-blob blob1"></div>
+    <div class="login-bg-blob blob2"></div>
+
+    <div class="login-hero">
+      <div class="login-emoji">🌴☀️🍹</div>
+      <h1>Turkey Challenge</h1>
+      <p class="login-sub">Готовимся к отпуску втроём — шаг за шагом</p>
+    </div>
+
+    <form id="loginForm" class="login-card">
+      <label class="field">
+        <span>Логин</span>
+        <input type="text" id="loginInput" autocomplete="username" placeholder="tanya / lilu / nastya" required>
+      </label>
+      <label class="field">
+        <span>Пароль</span>
+        <input type="password" id="passwordInput" autocomplete="current-password" placeholder="••••••••" required>
+      </label>
+      <p id="loginError" class="login-error" hidden></p>
+      <button type="submit" class="btn btn-primary btn-block">Войти ✈️</button>
+      <p class="login-hint">Доступ по данным из <code>users.json</code></p>
+    </form>
+  </section>
+
+  <!-- ===== APP SCREEN ===== -->
+  <section id="appScreen" class="screen app-screen" hidden>
+
+    <!-- HOME TAB -->
+    <div class="tab-panel" id="tab-home">
+      <header class="app-header">
+        <div class="who">
+          <div class="avatar" id="homeAvatar">🌴</div>
+          <div>
+            <div class="greet" id="homeGreeting">Привет!</div>
+            <div class="streak" id="homeStreak">🔥 0 дней подряд</div>
+          </div>
+        </div>
+        <button class="icon-btn" id="logoutBtn" title="Выйти">⏏</button>
+      </header>
+
+      <div class="countdown-chip" id="countdownChip">
+        <span class="countdown-num" id="countdownNum">--</span>
+        <span class="countdown-label">дней до Турции</span>
+        <span class="countdown-plane">✈️</span>
+      </div>
+
+      <div class="motivation-banner" id="dailyMotivation">
+        <span class="motivation-emoji" id="motivationEmoji">🍹</span>
+        <span class="motivation-text" id="motivationText">Вы на один день ближе к отпуску!</span>
+      </div>
+
+      <div class="ring-card">
+        <svg class="ring" viewBox="0 0 200 200">
+          <circle class="ring-bg" cx="100" cy="100" r="86"></circle>
+          <circle class="ring-fg" id="ringProgress" cx="100" cy="100" r="86"></circle>
+        </svg>
+        <div class="ring-center">
+          <div class="ring-value" id="ringValue">0</div>
+          <div class="ring-unit">шагов сегодня</div>
+          <div class="ring-goal" id="ringGoal">цель: 8 000</div>
+        </div>
+      </div>
+
+      <div class="quick-actions">
+        <button class="btn btn-action" id="openStepsModal">🚶 Добавить шаги</button>
+        <button class="btn btn-action btn-action-alt" id="openWorkoutModal">🏋️ Добавить тренировку</button>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Прогресс команды сегодня</div>
+        <div class="team-bar-track">
+          <div class="team-bar-fill" id="teamBarFill"></div>
+        </div>
+        <div class="team-bar-caption" id="teamBarCaption">0 из 24 000 шагов</div>
+        <div class="mini-friends" id="miniFriends"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Шаги за неделю</div>
+        <canvas id="weekChart" height="160"></canvas>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Последняя активность</div>
+        <ul class="history-list" id="historyList"></ul>
+      </div>
+    </div>
+
+    <!-- FEED TAB -->
+    <div class="tab-panel" id="tab-feed" hidden>
+      <header class="app-header simple">
+        <h2>Лента 📰</h2>
+      </header>
+      <div class="feed-list" id="feedList"></div>
+    </div>
+
+    <!-- TEAM TAB -->
+    <div class="tab-panel" id="tab-team" hidden>
+      <header class="app-header simple">
+        <h2>Команда 🏝️</h2>
+      </header>
+
+      <div class="card">
+        <div class="card-title">Общий прогресс до поездки</div>
+        <canvas id="teamChart" height="180"></canvas>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Все участницы</div>
+        <div class="team-list" id="teamList"></div>
+      </div>
+    </div>
+
+    <!-- ACHIEVEMENTS TAB -->
+    <div class="tab-panel" id="tab-ach" hidden>
+      <header class="app-header simple">
+        <h2>Достижения 🏆</h2>
+      </header>
+      <div class="badge-grid" id="badgeGrid"></div>
+    </div>
+
+    <!-- PROFILE TAB -->
+    <div class="tab-panel" id="tab-profile" hidden>
+      <header class="app-header simple">
+        <h2>Профиль</h2>
+      </header>
+
+      <div class="profile-card">
+        <div class="avatar avatar-lg" id="profileAvatar">🌴</div>
+        <div class="profile-name" id="profileName">—</div>
+        <div class="profile-sub" id="profileLogin">—</div>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat-box">
+          <div class="stat-num" id="statTotalSteps">0</div>
+          <div class="stat-label">всего шагов</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-num" id="statWorkouts">0</div>
+          <div class="stat-label">тренировок</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-num" id="statBestStreak">0</div>
+          <div class="stat-label">лучший стрик</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-num" id="statPoints">0</div>
+          <div class="stat-label">очков</div>
+        </div>
+      </div>
+
+      <button class="btn btn-secondary btn-block" id="logoutBtn2">Выйти из аккаунта</button>
+    </div>
+
+    <!-- BOTTOM NAV -->
+    <nav class="bottom-nav">
+      <button class="nav-btn active" data-tab="home"><span>🏠</span>Главная</button>
+      <button class="nav-btn" data-tab="feed"><span>📰</span>Лента</button>
+      <button class="nav-btn" data-tab="team"><span>👯</span>Команда</button>
+      <button class="nav-btn" data-tab="ach"><span>🏆</span>Награды</button>
+      <button class="nav-btn" data-tab="profile"><span>🙂</span>Профиль</button>
+    </nav>
+  </section>
+
+  <!-- STEPS MODAL -->
+  <div class="modal-backdrop" id="stepsModal" hidden>
+    <div class="modal">
+      <div class="modal-title" id="stepsModalTitle">Добавить шаги 🚶</div>
+      <input type="number" id="stepsInput" class="modal-input" placeholder="Например, 6500" min="1" max="60000">
+      <div class="modal-actions">
+        <button class="btn btn-secondary" data-close="stepsModal">Отмена</button>
+        <button class="btn btn-primary" id="saveStepsBtn">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- WORKOUT MODAL -->
+  <div class="modal-backdrop" id="workoutModal" hidden>
+    <div class="modal">
+      <div class="modal-title" id="workoutModalTitle">Добавить тренировку 🏋️</div>
+      <select id="workoutType" class="modal-input">
+        <option value="Кардио">🏃 Кардио</option>
+        <option value="Плавание">🏊 Плавание</option>
+        <option value="Йога">🧘 Йога / стретчинг</option>
+        <option value="Силовая">🏋️ Силовая</option>
+        <option value="Танцы">💃 Танцы</option>
+        <option value="Прогулка">🚶‍♀️ Активная прогулка</option>
+      </select>
+      <input type="number" id="workoutMinutes" class="modal-input" placeholder="Минут, например 30" min="1" max="300">
+      <input type="number" id="workoutCalories" class="modal-input" placeholder="Калории (необязательно)" min="1" max="3000">
+      <div class="modal-actions">
+        <button class="btn btn-secondary" data-close="workoutModal">Отмена</button>
+        <button class="btn btn-primary" id="saveWorkoutBtn">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOAST -->
+  <div class="toast" id="toast" hidden>
+    <div class="toast-emoji" id="toastEmoji">🎉</div>
+    <div class="toast-text" id="toastText"></div>
+  </div>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
