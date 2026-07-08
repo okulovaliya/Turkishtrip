@@ -69,13 +69,16 @@ const ACHIEVEMENTS = [
 // ---------- STATE ----------
 let USERS = [];
 let currentUser = null;
-let activities = {}; // login -> [ {id, date, type, steps?, workoutType?, workoutMinutes?, points, ts} ]
-let comments = {}; // activityId -> [ {login, name, text, ts} ]
-let reactions = {}; // activityId -> { emoji: [login, ...] }
+let activities = {}; // login -> { entryId: {id, date, type, steps?, workoutType?, workoutMinutes?, points, ts} }
+let comments = {}; // activityId -> { commentId: {login, name, text, ts} }
+let reactions = {}; // activityId -> { emoji: { login: true } }
 let weekChartInstance = null;
 let teamChartInstance = null;
 let toastTimer = null;
 let editingEntryId = null;
+let currentTab = "home";
+let useCloud = false;
+let db = null;
 
 // ---------- UTIL ----------
 const $ = (sel) => document.querySelector(sel);
@@ -143,46 +146,79 @@ async function loadUsersData() {
   }
 }
 
-function loadActivitiesFromStorage() {
+// Cloud (Firebase) sync with automatic fallback to local-only storage
+// if firebase-config.js hasn't been filled in yet.
+function initStorage() {
   try {
-    activities = JSON.parse(localStorage.getItem("tc_activities") || "{}");
+    if (
+      typeof firebaseConfig !== "undefined" &&
+      firebaseConfig &&
+      firebaseConfig.apiKey &&
+      !String(firebaseConfig.apiKey).includes("ВАШ") &&
+      typeof firebase !== "undefined"
+    ) {
+      firebase.initializeApp(firebaseConfig);
+      db = firebase.database();
+      useCloud = true;
+    }
   } catch (e) {
-    activities = {};
+    console.warn("Firebase недоступен, работаем в локальном режиме:", e);
+    useCloud = false;
   }
+
+  if (useCloud) {
+    db.ref("activities").on("value", (snap) => {
+      activities = snap.val() || {};
+      ensureUserBuckets();
+      rerenderCurrentTab();
+    });
+    db.ref("comments").on("value", (snap) => {
+      comments = snap.val() || {};
+      rerenderCurrentTab();
+    });
+    db.ref("reactions").on("value", (snap) => {
+      reactions = snap.val() || {};
+      rerenderCurrentTab();
+    });
+  } else {
+    loadLocalFallback();
+  }
+}
+
+function ensureUserBuckets() {
   USERS.forEach((u) => {
-    if (!Array.isArray(activities[u.login])) activities[u.login] = [];
+    if (!activities[u.login]) activities[u.login] = {};
   });
 }
-function saveActivities() {
+
+function loadLocalFallback() {
+  try { activities = JSON.parse(localStorage.getItem("tc_activities") || "{}"); } catch (e) { activities = {}; }
+  try { comments = JSON.parse(localStorage.getItem("tc_comments") || "{}"); } catch (e) { comments = {}; }
+  try { reactions = JSON.parse(localStorage.getItem("tc_reactions") || "{}"); } catch (e) { reactions = {}; }
+  ensureUserBuckets();
+}
+
+// Only used in local (non-cloud) fallback mode — cloud writes persist per-call.
+function persistLocal() {
+  if (useCloud) return;
   localStorage.setItem("tc_activities", JSON.stringify(activities));
-}
-
-function loadCommentsFromStorage() {
-  try {
-    comments = JSON.parse(localStorage.getItem("tc_comments") || "{}");
-  } catch (e) {
-    comments = {};
-  }
-}
-function saveComments() {
   localStorage.setItem("tc_comments", JSON.stringify(comments));
+  localStorage.setItem("tc_reactions", JSON.stringify(reactions));
 }
 
-function loadReactionsFromStorage() {
-  try {
-    reactions = JSON.parse(localStorage.getItem("tc_reactions") || "{}");
-  } catch (e) {
-    reactions = {};
-  }
-}
-function saveReactions() {
-  localStorage.setItem("tc_reactions", JSON.stringify(reactions));
+function rerenderCurrentTab() {
+  if (!currentUser) return;
+  if (currentTab === "home") renderHome();
+  else if (currentTab === "feed") renderFeed();
+  else if (currentTab === "team") renderTeam();
+  else if (currentTab === "ach") renderAchievements();
+  else if (currentTab === "profile") renderProfile();
 }
 
 // ---------- COMPUTATIONS ----------
 function dailyAggregates(login) {
   const map = {};
-  (activities[login] || []).forEach((e) => {
+  Object.values(activities[login] || {}).forEach((e) => {
     if (!map[e.date]) map[e.date] = { steps: 0, workoutMinutes: 0, workouts: [] };
     if (e.type === "steps") map[e.date].steps += e.steps;
     if (e.type === "workout") {
@@ -194,7 +230,7 @@ function dailyAggregates(login) {
 }
 
 function computeTotals(login) {
-  const list = activities[login] || [];
+  const list = Object.values(activities[login] || {});
   const agg = dailyAggregates(login);
   let totalSteps = 0, totalWorkouts = 0, totalWorkoutMinutes = 0, points = 0, maxDaySteps = 0;
   list.forEach((e) => {
@@ -333,7 +369,7 @@ function daysWord(n) {
 }
 
 function renderHistory() {
-  const list = (activities[currentUser.login] || []).slice().sort((a, b) => b.ts - a.ts).slice(0, 6);
+  const list = Object.values(activities[currentUser.login] || {}).sort((a, b) => b.ts - a.ts).slice(0, 6);
   const el = $("#historyList");
   el.innerHTML = "";
   if (!list.length) {
@@ -373,33 +409,49 @@ function openEditModalForEntry(entry) {
 }
 
 function updateStepsEntry(id, steps) {
-  const entry = (activities[currentUser.login] || []).find((e) => e.id === id);
+  const entry = activities[currentUser.login] && activities[currentUser.login][id];
   if (!entry) return;
   entry.steps = steps;
   entry.points = pointsForSteps(steps);
-  saveActivities();
+  if (useCloud) db.ref(`activities/${currentUser.login}/${id}`).update({ steps: entry.steps, points: entry.points });
+  else persistLocal();
   showToast("✏️", "Запись обновлена!");
   renderHome();
 }
 
 function updateWorkoutEntry(id, type, minutes, calories) {
-  const entry = (activities[currentUser.login] || []).find((e) => e.id === id);
+  const entry = activities[currentUser.login] && activities[currentUser.login][id];
   if (!entry) return;
   entry.workoutType = type;
   entry.workoutMinutes = minutes;
   entry.workoutCalories = calories || null;
   entry.points = pointsForWorkout(minutes);
-  saveActivities();
+  if (useCloud) {
+    db.ref(`activities/${currentUser.login}/${id}`).update({
+      workoutType: entry.workoutType,
+      workoutMinutes: entry.workoutMinutes,
+      workoutCalories: entry.workoutCalories,
+      points: entry.points
+    });
+  } else {
+    persistLocal();
+  }
   showToast("✏️", "Запись обновлена!");
   renderHome();
 }
 
 function deleteEntry(id) {
   if (!confirm("Удалить эту запись из истории?")) return;
-  activities[currentUser.login] = (activities[currentUser.login] || []).filter((e) => e.id !== id);
-  saveActivities();
-  if (comments[id]) { delete comments[id]; saveComments(); }
-  if (reactions[id]) { delete reactions[id]; saveReactions(); }
+  if (activities[currentUser.login]) delete activities[currentUser.login][id];
+  if (comments[id]) delete comments[id];
+  if (reactions[id]) delete reactions[id];
+  if (useCloud) {
+    db.ref(`activities/${currentUser.login}/${id}`).remove();
+    db.ref(`comments/${id}`).remove();
+    db.ref(`reactions/${id}`).remove();
+  } else {
+    persistLocal();
+  }
   showToast("🗑", "Запись удалена");
   renderHome();
 }
@@ -440,7 +492,7 @@ const REACTION_EMOJIS = ["🔥", "👏", "💪", "🎉", "😍"];
 function buildFeed() {
   const items = [];
   USERS.forEach((u) => {
-    (activities[u.login] || []).forEach((e) => {
+    Object.values(activities[u.login] || {}).forEach((e) => {
       const text = e.type === "steps"
         ? `добавила ${nf(e.steps)} шагов 🚶`
         : `добавила тренировку: ${e.workoutType}, ${e.workoutMinutes} мин${e.workoutCalories ? `, ${nf(e.workoutCalories)} ккал` : ""} 🏋️`;
@@ -460,23 +512,23 @@ function renderFeed() {
     return;
   }
   items.forEach((item) => {
-    const itemComments = comments[item.id] || [];
+    const itemComments = Object.entries(comments[item.id] || {}).sort((a, b) => a[1].ts - b[1].ts);
     const itemReactions = reactions[item.id] || {};
     const el = document.createElement("div");
     el.className = "feed-item";
     el.dataset.id = item.id;
 
     const reactionsHtml = REACTION_EMOJIS.map((r) => {
-      const arr = itemReactions[r] || [];
-      const active = arr.includes(currentUser.login);
-      return `<button class="reaction-btn${active ? " active" : ""}" type="button" data-item="${item.id}" data-emoji="${r}">${r}${arr.length ? ` <span class="reaction-count">${arr.length}</span>` : ""}</button>`;
+      const logins = Object.keys(itemReactions[r] || {});
+      const active = logins.includes(currentUser.login);
+      return `<button class="reaction-btn${active ? " active" : ""}" type="button" data-item="${item.id}" data-emoji="${r}">${r}${logins.length ? ` <span class="reaction-count">${logins.length}</span>` : ""}</button>`;
     }).join("");
 
     const commentsHtml = itemComments.length
-      ? `<div class="feed-comments">${itemComments.map((c, idx) => `
+      ? `<div class="feed-comments">${itemComments.map(([cid, c]) => `
           <div class="feed-comment">
             <span><b>${escapeHtml(c.name)}:</b> ${escapeHtml(c.text)}</span>
-            ${c.login === currentUser.login ? `<button class="feed-comment-del" type="button" data-item="${item.id}" data-idx="${idx}">✕</button>` : ""}
+            ${c.login === currentUser.login ? `<button class="feed-comment-del" type="button" data-item="${item.id}" data-cid="${cid}">✕</button>` : ""}
           </div>`).join("")}</div>`
       : "";
 
@@ -503,28 +555,37 @@ function addCommentFromItem(itemEl) {
   const input = itemEl.querySelector(".feed-comment-input");
   const text = input.value.trim();
   if (!text) return;
-  if (!comments[id]) comments[id] = [];
-  comments[id].push({ login: currentUser.login, name: currentUser.name, text, ts: Date.now() });
-  saveComments();
+  const cid = randomId();
+  const comment = { login: currentUser.login, name: currentUser.name, text, ts: Date.now() };
+  if (!comments[id]) comments[id] = {};
+  comments[id][cid] = comment;
+  if (useCloud) db.ref(`comments/${id}/${cid}`).set(comment);
+  else persistLocal();
   renderFeed();
 }
 
-function deleteComment(itemId, idx) {
-  if (!comments[itemId] || !comments[itemId][idx]) return;
-  comments[itemId].splice(idx, 1);
-  if (comments[itemId].length === 0) delete comments[itemId];
-  saveComments();
+function deleteComment(itemId, cid) {
+  if (!comments[itemId] || !comments[itemId][cid]) return;
+  delete comments[itemId][cid];
+  if (Object.keys(comments[itemId]).length === 0) delete comments[itemId];
+  if (useCloud) db.ref(`comments/${itemId}/${cid}`).remove();
+  else persistLocal();
   renderFeed();
 }
 
 function toggleReaction(itemId, emoji) {
   if (!reactions[itemId]) reactions[itemId] = {};
-  if (!reactions[itemId][emoji]) reactions[itemId][emoji] = [];
-  const arr = reactions[itemId][emoji];
-  const idx = arr.indexOf(currentUser.login);
-  if (idx >= 0) arr.splice(idx, 1); else arr.push(currentUser.login);
-  if (arr.length === 0) delete reactions[itemId][emoji];
-  saveReactions();
+  if (!reactions[itemId][emoji]) reactions[itemId][emoji] = {};
+  const already = !!reactions[itemId][emoji][currentUser.login];
+  if (already) {
+    delete reactions[itemId][emoji][currentUser.login];
+    if (useCloud) db.ref(`reactions/${itemId}/${emoji}/${currentUser.login}`).remove();
+  } else {
+    reactions[itemId][emoji][currentUser.login] = true;
+    if (useCloud) db.ref(`reactions/${itemId}/${emoji}/${currentUser.login}`).set(true);
+  }
+  if (Object.keys(reactions[itemId][emoji]).length === 0) delete reactions[itemId][emoji];
+  if (!useCloud) persistLocal();
   renderFeed();
 }
 
@@ -597,6 +658,9 @@ function renderProfile() {
   $("#profileAvatar").textContent = currentUser.avatar;
   $("#profileName").textContent = currentUser.name;
   $("#profileLogin").textContent = "@" + currentUser.login;
+  const badge = $("#syncBadge");
+  badge.textContent = useCloud ? "☁️ синхронизировано со всеми" : "📱 только на этом устройстве";
+  badge.classList.toggle("cloud", useCloud);
   const t = computeTotals(currentUser.login);
   const s = computeStreak(currentUser.login);
   $("#statTotalSteps").textContent = nf(t.totalSteps);
@@ -608,16 +672,22 @@ function renderProfile() {
 // ---------- ACTIVITY ADDING ----------
 function addStepsEntry(steps) {
   const before = new Set(computeAchievements(currentUser.login).filter((a) => a.unlocked).map((a) => a.id));
-  const entry = { id: randomId(), date: getTodayStr(), type: "steps", steps, points: pointsForSteps(steps), ts: Date.now() };
-  activities[currentUser.login].push(entry);
-  saveActivities();
+  const id = randomId();
+  const entry = { id, date: getTodayStr(), type: "steps", steps, points: pointsForSteps(steps), ts: Date.now() };
+  if (!activities[currentUser.login]) activities[currentUser.login] = {};
+  activities[currentUser.login][id] = entry;
+  if (useCloud) db.ref(`activities/${currentUser.login}/${id}`).set(entry);
+  else persistLocal();
   afterAdd("steps", before);
 }
 function addWorkoutEntry(type, minutes, calories) {
   const before = new Set(computeAchievements(currentUser.login).filter((a) => a.unlocked).map((a) => a.id));
-  const entry = { id: randomId(), date: getTodayStr(), type: "workout", workoutType: type, workoutMinutes: minutes, workoutCalories: calories || null, points: pointsForWorkout(minutes), ts: Date.now() };
-  activities[currentUser.login].push(entry);
-  saveActivities();
+  const id = randomId();
+  const entry = { id, date: getTodayStr(), type: "workout", workoutType: type, workoutMinutes: minutes, workoutCalories: calories || null, points: pointsForWorkout(minutes), ts: Date.now() };
+  if (!activities[currentUser.login]) activities[currentUser.login] = {};
+  activities[currentUser.login][id] = entry;
+  if (useCloud) db.ref(`activities/${currentUser.login}/${id}`).set(entry);
+  else persistLocal();
   afterAdd("workout", before);
 }
 
@@ -648,6 +718,7 @@ function closeModal(id) { $("#" + id).hidden = true; }
 
 // ---------- NAV ----------
 function switchTab(tab) {
+  currentTab = tab;
   document.querySelectorAll(".tab-panel").forEach((p) => (p.hidden = true));
   document.querySelectorAll(".nav-btn").forEach((b) => b.classList.remove("active"));
   $(`#tab-${tab}`).hidden = false;
@@ -743,7 +814,7 @@ function wireEvents() {
     const editBtn = e.target.closest(".hi-edit");
     const delBtn = e.target.closest(".hi-delete");
     if (editBtn) {
-      const entry = (activities[currentUser.login] || []).find((x) => x.id === editBtn.dataset.id);
+      const entry = activities[currentUser.login] && activities[currentUser.login][editBtn.dataset.id];
       if (entry) openEditModalForEntry(entry);
       return;
     }
@@ -755,7 +826,7 @@ function wireEvents() {
     if (reactBtn) { toggleReaction(reactBtn.dataset.item, reactBtn.dataset.emoji); return; }
 
     const commentDel = e.target.closest(".feed-comment-del");
-    if (commentDel) { deleteComment(commentDel.dataset.item, parseInt(commentDel.dataset.idx, 10)); return; }
+    if (commentDel) { deleteComment(commentDel.dataset.item, commentDel.dataset.cid); return; }
 
     const btn = e.target.closest(".feed-comment-btn");
     if (btn) addCommentFromItem(btn.closest(".feed-item"));
@@ -770,9 +841,7 @@ function wireEvents() {
 
 async function init() {
   await loadUsersData();
-  loadActivitiesFromStorage();
-  loadCommentsFromStorage();
-  loadReactionsFromStorage();
+  initStorage();
   wireEvents();
 
   const savedLogin = localStorage.getItem("tc_session");
