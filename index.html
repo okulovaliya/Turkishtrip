@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Turkey Challenge 🌴</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="apple-touch-icon" href="favicon.svg">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -88,8 +90,14 @@
         <div class="mini-friends" id="miniFriends"></div>
       </div>
 
-      <div class="card">
-        <div class="card-title">Статистика</div>
+      <div class="card chart-card">
+        <div class="chart-card-header">
+          <div class="card-title">Статистика</div>
+          <svg class="chart-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 15l4.5-5 4 3.5L20 6"/>
+            <path d="M15 6h5v5"/>
+          </svg>
+        </div>
         <div class="chart-controls">
           <div class="segmented" id="metricSegmented">
             <button class="seg-btn" type="button" data-metric="steps">Шаги</button>
@@ -102,7 +110,7 @@
             <button class="seg-btn" type="button" data-period="month">Месяц</button>
           </div>
         </div>
-        <canvas id="weekChart" height="160"></canvas>
+        <div class="chart-canvas-wrap"><canvas id="weekChart" height="160"></canvas></div>
       </div>
 
       <div class="card">
@@ -125,8 +133,14 @@
         <h2>Команда 🏝️</h2>
       </header>
 
-      <div class="card">
-        <div class="card-title">Статистика команды</div>
+      <div class="card chart-card">
+        <div class="chart-card-header">
+          <div class="card-title">Статистика команды</div>
+          <svg class="chart-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 15l4.5-5 4 3.5L20 6"/>
+            <path d="M15 6h5v5"/>
+          </svg>
+        </div>
         <div class="chart-controls">
           <div class="segmented" id="teamMetricSegmented">
             <button class="seg-btn active" type="button" data-metric="steps">Шаги</button>
@@ -139,7 +153,7 @@
             <button class="seg-btn" type="button" data-period="month">Месяц</button>
           </div>
         </div>
-        <canvas id="teamChart" height="180"></canvas>
+        <div class="chart-canvas-wrap"><canvas id="teamChart" height="180"></canvas></div>
       </div>
 
       <div class="card">

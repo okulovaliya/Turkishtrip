@@ -654,31 +654,191 @@ function deleteEntry(id) {
   renderHome();
 }
 
+// ---------- CHART HELPERS: sparkline-style trend charts ----------
+function hexToRgba(hex, alpha) {
+  if (!hex) return `rgba(47, 217, 196, ${alpha})`;
+  let h = hex.replace("#", "");
+  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+  const bigint = parseInt(h, 16);
+  const r = (bigint >> 16) & 255, g = (bigint >> 8) & 255, b = bigint & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function hexToHsl(hex) {
+  let h = hex.replace("#", "");
+  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+  const r = parseInt(h.substr(0, 2), 16) / 255;
+  const g = parseInt(h.substr(2, 2), 16) / 255;
+  const b = parseInt(h.substr(4, 2), 16) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let hue, sat, light = (max + min) / 2;
+  if (max === min) { hue = sat = 0; }
+  else {
+    const d = max - min;
+    sat = light > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: hue = (g - b) / d + (g < b ? 6 : 0); break;
+      case g: hue = (b - r) / d + 2; break;
+      default: hue = (r - g) / d + 4;
+    }
+    hue /= 6;
+  }
+  return { h: hue * 360, s: sat * 100, l: light * 100 };
+}
+// Softer, less saturated / brighter version of a hex color for calmer chart lines
+function softenColor(hex, satMul = 0.55, lightAdd = 10, alpha = 1) {
+  const { h, s, l } = hexToHsl(hex);
+  return `hsla(${h.toFixed(1)}, ${(s * satMul).toFixed(1)}%, ${Math.min(80, l + lightAdd).toFixed(1)}%, ${alpha})`;
+}
+
+// Adds a soft neon glow behind each dataset's line as it's drawn
+const neonGlowPlugin = {
+  id: "neonGlow",
+  beforeDatasetDraw(chart, args) {
+    const ds = chart.data.datasets[args.index];
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.shadowColor = ds.borderColor;
+    ctx.shadowBlur = 3.5;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+  },
+  afterDatasetDraw(chart) {
+    chart.ctx.restore();
+  }
+};
+
+function computePeakIndices(values, excludeIdx, max = 2) {
+  return values
+    .map((v, i) => ({ v, i }))
+    .filter((o) => o.v > 0 && o.i !== excludeIdx)
+    .sort((a, b) => b.v - a.v)
+    .slice(0, max)
+    .map((o) => o.i);
+}
+
+// Draws the numeric value above the "today" point and any highlighted peak points
+const valueLabelsPlugin = {
+  id: "valueLabels",
+  afterDatasetsDraw(chart) {
+    const meta = chart.getDatasetMeta(0);
+    if (!meta || !meta.data || !meta.data.length) return;
+    const values = chart.data.datasets[0].data;
+    const lastIdx = values.length - 1;
+    const idxs = new Set(chart.data.peakIndices || []);
+    idxs.add(lastIdx);
+    const { ctx } = chart;
+    ctx.save();
+    ctx.font = "700 11px -apple-system, BlinkMacSystemFont, sans-serif";
+    ctx.textAlign = "center";
+    idxs.forEach((i) => {
+      const pt = meta.data[i];
+      if (!pt || !values[i]) return;
+      const isToday = i === lastIdx;
+      ctx.fillStyle = isToday ? "#FFB020" : "#CFE38A";
+      ctx.fillText(nf(values[i]), pt.x, Math.max(12, pt.y - 12));
+    });
+    ctx.restore();
+  }
+};
+
+// Draws soft rounded highlight bars behind "peak" x-positions, chart.data.peakIndices
+const peakBarsPlugin = {
+  id: "peakBars",
+  beforeDatasetsDraw(chart) {
+    const idxs = chart.data.peakIndices;
+    if (!idxs || !idxs.length) return;
+    const { ctx, chartArea, scales } = chart;
+    if (!chartArea || !scales.x) return;
+    const xScale = scales.x;
+    const count = chart.data.labels.length || 1;
+    const barW = Math.max(16, (chartArea.right - chartArea.left) / count * 0.5);
+    ctx.save();
+    idxs.forEach((i) => {
+      const cx = xScale.getPixelForValue(i);
+      const x = cx - barW / 2;
+      const y = chartArea.top;
+      const h = chartArea.bottom - chartArea.top;
+      const r = 9;
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + barW, y, x + barW, y + h, r);
+      ctx.arcTo(x + barW, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + barW, y, r);
+      ctx.closePath();
+      ctx.fillStyle = "rgba(255, 176, 32, 0.12)";
+      ctx.fill();
+    });
+    ctx.restore();
+  }
+};
+
 function renderWeekChart() {
   const canvas = $("#weekChart");
   if (!canvas || typeof Chart === "undefined") return;
   const { labels, values } = buildBuckets(currentUser.login, chartPeriod, chartMetric);
   if (weekChartInstance) weekChartInstance.destroy();
-  weekChartInstance = new Chart(canvas.getContext("2d"), {
-    type: "bar",
+
+  const ctx = canvas.getContext("2d");
+  const accent = "#B7E14D"; // lime-green trend line, in the spirit of the Kalo-style reference
+  const fillGrad = ctx.createLinearGradient(0, 0, 0, canvas.height || 160);
+  fillGrad.addColorStop(0, hexToRgba(accent, 0.32));
+  fillGrad.addColorStop(1, hexToRgba(accent, 0));
+
+  const lastIdx = values.length - 1;
+  const pointRadius = values.map((_, i) => (i === lastIdx ? 5 : 0));
+  const pointHoverRadius = values.map((_, i) => (i === lastIdx ? 6 : 5));
+  const pointHitRadius = values.map(() => 14);
+  const peakIndices = computePeakIndices(values, lastIdx);
+  const unit = metricLabel(chartMetric);
+
+  weekChartInstance = new Chart(ctx, {
+    type: "line",
     data: {
       labels,
+      peakIndices,
       datasets: [{
-        label: metricLabel(chartMetric),
+        label: unit,
         data: values,
-        backgroundColor: currentUser.color || "#2FD9C4",
-        borderRadius: 8,
-        maxBarThickness: 26
+        borderColor: accent,
+        backgroundColor: fillGrad,
+        borderWidth: 2.5,
+        tension: 0.42,
+        fill: true,
+        pointRadius,
+        pointHoverRadius,
+        pointHitRadius,
+        pointBackgroundColor: "#FFB020",
+        pointBorderColor: "#fff",
+        pointBorderWidth: 2
       }]
     },
     options: {
       responsive: true,
-      plugins: { legend: { display: false } },
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          enabled: true,
+          backgroundColor: "rgba(23, 27, 39, 0.95)",
+          titleColor: "#F4F5F7",
+          bodyColor: "#F4F5F7",
+          borderColor: accent,
+          borderWidth: 1,
+          padding: 10,
+          displayColors: false,
+          callbacks: {
+            label: (c) => `${unit}: ${nf(c.parsed.y)}`
+          }
+        }
+      },
       scales: {
-        x: { grid: { display: false }, ticks: { color: "#9AA0B2" } },
-        y: { grid: { color: "#232838" }, ticks: { color: "#9AA0B2" } }
+        x: { grid: { display: false }, ticks: { color: "#6B7086", font: { size: 10.5, weight: "600" } } },
+        y: { display: false, grid: { display: false } }
       }
-    }
+    },
+    plugins: [peakBarsPlugin, valueLabelsPlugin]
   });
 }
 
@@ -793,26 +953,66 @@ function renderTeam() {
     const datasets = USERS.map((u) => {
       const bucket = buildBuckets(u.login, teamChartPeriod, teamChartMetric);
       labels = bucket.labels;
+      const lastIdx = bucket.values.length - 1;
+      const pointRadius = bucket.values.map((_, i) => (i === lastIdx ? 4 : 0));
+      const pointHitRadius = bucket.values.map(() => 12);
+      const lineColor = softenColor(u.color, 0.55, 10);
+      const dotColor = softenColor(u.color, 0.7, 4);
       return {
         label: u.name,
         data: bucket.values,
-        backgroundColor: u.color,
-        borderRadius: 6,
-        maxBarThickness: 18
+        borderColor: lineColor,
+        backgroundColor: "transparent",
+        borderWidth: 2.2,
+        tension: 0.4,
+        fill: false,
+        pointRadius,
+        pointHoverRadius: 5,
+        pointHitRadius,
+        pointBackgroundColor: dotColor,
+        pointBorderColor: "#10121A",
+        pointBorderWidth: 1.5
       };
     });
+    const teamUnit = metricLabel(teamChartMetric);
     if (teamChartInstance) teamChartInstance.destroy();
     teamChartInstance = new Chart(canvas.getContext("2d"), {
-      type: "bar",
+      type: "line",
       data: { labels, datasets },
       options: {
         responsive: true,
-        plugins: { legend: { position: "bottom", labels: { color: "#F4F5F7", boxWidth: 10, font: { size: 11 } } } },
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: {
+            position: "bottom",
+            labels: {
+              color: "#F4F5F7",
+              usePointStyle: true,
+              pointStyle: "rectRounded",
+              boxWidth: 12,
+              boxHeight: 12,
+              padding: 20,
+              font: { size: 11 }
+            }
+          },
+          tooltip: {
+            enabled: true,
+            backgroundColor: "rgba(23, 27, 39, 0.95)",
+            titleColor: "#F4F5F7",
+            bodyColor: "#F4F5F7",
+            borderWidth: 1,
+            padding: 10,
+            callbacks: {
+              label: (c) => `${c.dataset.label}: ${nf(c.parsed.y)} ${teamUnit.toLowerCase()}`
+            }
+          }
+        },
         scales: {
-          x: { stacked: true, grid: { display: false }, ticks: { color: "#9AA0B2" } },
-          y: { stacked: true, grid: { color: "#232838" }, ticks: { color: "#9AA0B2" } }
+          x: { grid: { display: false }, ticks: { color: "#6B7086", font: { size: 10.5, weight: "600" } } },
+          y: { display: false, grid: { display: false } }
         }
-      }
+      },
+      plugins: [neonGlowPlugin]
     });
   }
 
