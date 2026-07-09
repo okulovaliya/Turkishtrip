@@ -54,25 +54,44 @@
         <button class="icon-btn" id="logoutBtn" title="Выйти">⏏</button>
       </header>
 
-      <div class="countdown-chip" id="countdownChip">
-        <span class="countdown-num" id="countdownNum">--</span>
-        <span class="countdown-label">дней до Турции</span>
-      </div>
-
       <div class="motivation-banner" id="dailyMotivation">
         <span class="motivation-emoji" id="motivationEmoji">🍹</span>
         <span class="motivation-text" id="motivationText">Вы на один день ближе к отпуску!</span>
       </div>
 
-      <div class="ring-card">
-        <svg class="ring" viewBox="0 0 200 200">
-          <circle class="ring-bg" cx="100" cy="100" r="86"></circle>
-          <circle class="ring-fg" id="ringProgress" cx="100" cy="100" r="86"></circle>
-        </svg>
-        <div class="ring-center">
-          <div class="ring-value" id="ringValue">0</div>
-          <div class="ring-unit">шагов сегодня</div>
-          <div class="ring-goal" id="ringGoal">цель: 8 000</div>
+      <div class="stat-squares">
+        <div class="stat-square stat-square-steps">
+          <div class="stat-square-top">
+            <svg class="stat-square-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <ellipse cx="8.5" cy="16" rx="3" ry="4.3" transform="rotate(-18 8.5 16)"/>
+              <ellipse cx="16" cy="8" rx="3" ry="4.3" transform="rotate(18 16 8)"/>
+            </svg>
+          </div>
+          <div class="mini-ring">
+            <svg class="mini-ring-svg" viewBox="0 0 100 100">
+              <circle class="mini-ring-bg" cx="50" cy="50" r="42"></circle>
+              <circle class="mini-ring-fg" id="ringProgress" cx="50" cy="50" r="42"></circle>
+            </svg>
+            <div class="mini-ring-value">
+              <span class="mini-ring-num" id="ringValue">0</span>
+              <span class="mini-ring-unit">шагов</span>
+            </div>
+          </div>
+          <div class="stat-square-sub" id="ringGoal">цель · 8 000</div>
+        </div>
+
+        <div class="stat-square">
+          <div class="stat-square-top">
+            <svg class="stat-square-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="4" y="5.5" width="16" height="15" rx="2.5"/>
+              <path d="M4 9.5h16M8 3.5v3M16 3.5v3"/>
+            </svg>
+          </div>
+          <div class="stat-square-big-wrap">
+            <span class="stat-square-big" id="countdownNum">--</span>
+            <span class="stat-square-unit">дней</span>
+          </div>
+          <div class="stat-square-sub" id="countdownSub">28 августа 2026</div>
         </div>
       </div>
 
@@ -93,10 +112,10 @@
       <div class="card chart-card">
         <div class="chart-card-header">
           <div class="card-title">Статистика</div>
-          <svg class="chart-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M4 15l4.5-5 4 3.5L20 6"/>
-            <path d="M15 6h5v5"/>
-          </svg>
+          <div class="chart-trend" id="weekChartTrend" hidden>
+            <span class="chart-trend-pct" id="weekChartTrendPct">—</span>
+            <span class="chart-trend-caption">vs прошлой недели</span>
+          </div>
         </div>
         <div class="chart-controls">
           <div class="segmented" id="metricSegmented">
@@ -136,10 +155,10 @@
       <div class="card chart-card">
         <div class="chart-card-header">
           <div class="card-title">Статистика команды</div>
-          <svg class="chart-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M4 15l4.5-5 4 3.5L20 6"/>
-            <path d="M15 6h5v5"/>
-          </svg>
+          <div class="chart-trend" id="teamChartTrend" hidden>
+            <span class="chart-trend-pct" id="teamChartTrendPct">—</span>
+            <span class="chart-trend-caption">vs прошлой недели</span>
+          </div>
         </div>
         <div class="chart-controls">
           <div class="segmented" id="teamMetricSegmented">

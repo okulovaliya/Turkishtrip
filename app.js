@@ -8,6 +8,15 @@ const DAILY_STEP_GOAL = 8000;
 
 // Fallback copy of users.json in case fetch fails (e.g. opened via file://)
 // No passwords are stored anywhere — Firebase Authentication owns those.
+// Fixed, vivid colors for the "Команда" trend chart lines — kept separate from each
+// person's `color` field (used elsewhere for charts/avatars) so this chart specifically
+// reads as clear yellow / blue / orange in line with the app's theme.
+const TEAM_CHART_COLORS = {
+  tanya: "#FF9F40",  // orange
+  lilu: "#4EA8FF",   // blue
+  nastya: "#FFD54F", // yellow
+};
+
 const FALLBACK_USERS = [
   { login: "tanya",  email: "tanya@turkeytrip.app",  name: "Танюшка",     avatar: "🌴", color: "#FF7A59", avatarGradient: "sunset" },
   { login: "lilu",   email: "lilu@turkeytrip.app",   name: "Лилу",        avatar: "🍹", color: "#2FD9C4", avatarGradient: "mint" },
@@ -499,9 +508,7 @@ function renderHome() {
     : "Начни серию сегодня!";
 
   const daysLeft = computeDaysLeft();
-  $("#countdownNum").textContent = daysLeft > 0 ? daysLeft : (daysLeft === 0 ? "Сегодня!" : "🎉");
-  $("#countdownChip").querySelector(".countdown-label").textContent =
-    daysLeft > 0 ? "дней до Турции" : (daysLeft === 0 ? "уже летим!" : "с моря — привет!");
+  $("#countdownNum").textContent = daysLeft > 0 ? daysLeft : (daysLeft === 0 ? "🎉" : "🌊");
 
   const motivation = pick(MOTIVATION_DAILY);
   $("#motivationEmoji").textContent = motivation.emoji;
@@ -511,10 +518,10 @@ function renderHome() {
   const agg = dailyAggregates(currentUser.login);
   const todaySteps = (agg[getTodayStr()] && agg[getTodayStr()].steps) || 0;
   const frac = Math.max(0, Math.min(1, todaySteps / myGoal));
-  const circumference = 540;
+  const circumference = 264;
   $("#ringProgress").style.strokeDashoffset = String(circumference * (1 - frac));
   $("#ringValue").textContent = nf(todaySteps);
-  $("#ringGoal").textContent = `цель: ${nf(myGoal)}`;
+  $("#ringGoal").textContent = `цель · ${nf(myGoal)}`;
 
   const teamGoal = USERS.reduce((sum, u) => sum + (u.dailyGoal || DAILY_STEP_GOAL), 0);
   const team = computeTeamTotals();
@@ -708,6 +715,33 @@ const neonGlowPlugin = {
   }
 };
 
+// Compares the sum of a metric over the last 7 days vs the 7 days before that
+function weekOverWeekTotals(login, metric) {
+  const agg = dailyAggregates(login);
+  const metricKey = metric === "steps" ? "steps" : metric === "workouts" ? "workoutMinutes" : "points";
+  const today = startOfDay(new Date());
+  let thisWeek = 0, lastWeek = 0;
+  for (let i = 0; i < 14; i++) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const ds = formatDate(d);
+    const v = agg[ds] ? agg[ds][metricKey] : 0;
+    if (i < 7) thisWeek += v; else lastWeek += v;
+  }
+  return { thisWeek, lastWeek };
+}
+
+function renderTrendBadge(elId, pctElId, thisWeek, lastWeek) {
+  const wrap = $(elId);
+  const pctEl = $(pctElId);
+  if (!wrap || !pctEl) return;
+  if (!lastWeek) { wrap.hidden = true; return; }
+  const pct = Math.round(((thisWeek - lastWeek) / lastWeek) * 100);
+  wrap.hidden = false;
+  pctEl.textContent = `${pct >= 0 ? "↑" : "↓"} ${Math.abs(pct)}%`;
+  pctEl.classList.toggle("down", pct < 0);
+}
+
 function computePeakIndices(values, excludeIdx, max = 2) {
   return values
     .map((v, i) => ({ v, i }))
@@ -779,6 +813,9 @@ function renderWeekChart() {
   if (!canvas || typeof Chart === "undefined") return;
   const { labels, values } = buildBuckets(currentUser.login, chartPeriod, chartMetric);
   if (weekChartInstance) weekChartInstance.destroy();
+
+  const wow = weekOverWeekTotals(currentUser.login, chartMetric);
+  renderTrendBadge("#weekChartTrend", "#weekChartTrendPct", wow.thisWeek, wow.lastWeek);
 
   const ctx = canvas.getContext("2d");
   const accent = "#B7E14D"; // lime-green trend line, in the spirit of the Kalo-style reference
@@ -949,6 +986,14 @@ function toggleReaction(itemId, emoji) {
 function renderTeam() {
   const canvas = $("#teamChart");
   if (canvas && typeof Chart !== "undefined") {
+    const teamWow = USERS.reduce((sum, u) => {
+      const w = weekOverWeekTotals(u.login, teamChartMetric);
+      sum.thisWeek += w.thisWeek;
+      sum.lastWeek += w.lastWeek;
+      return sum;
+    }, { thisWeek: 0, lastWeek: 0 });
+    renderTrendBadge("#teamChartTrend", "#teamChartTrendPct", teamWow.thisWeek, teamWow.lastWeek);
+
     let labels = [];
     const datasets = USERS.map((u) => {
       const bucket = buildBuckets(u.login, teamChartPeriod, teamChartMetric);
@@ -956,8 +1001,9 @@ function renderTeam() {
       const lastIdx = bucket.values.length - 1;
       const pointRadius = bucket.values.map((_, i) => (i === lastIdx ? 4 : 0));
       const pointHitRadius = bucket.values.map(() => 12);
-      const lineColor = softenColor(u.color, 0.55, 10);
-      const dotColor = softenColor(u.color, 0.7, 4);
+      const teamColor = TEAM_CHART_COLORS[u.login] || u.color;
+      const lineColor = teamColor;
+      const dotColor = teamColor;
       return {
         label: u.name,
         data: bucket.values,
