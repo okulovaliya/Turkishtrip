@@ -9,10 +9,26 @@ const DAILY_STEP_GOAL = 8000;
 // Fallback copy of users.json in case fetch fails (e.g. opened via file://)
 // No passwords are stored anywhere — Firebase Authentication owns those.
 const FALLBACK_USERS = [
-  { login: "tanya",  email: "tanya@turkeytrip.app",  name: "Танюшка",     avatar: "🌴", color: "#FF7A59" },
-  { login: "lilu",   email: "lilu@turkeytrip.app",   name: "Лилу",        avatar: "🍹", color: "#2FD9C4" },
-  { login: "nastya", email: "nastya@turkeytrip.app", name: "Анастасися",  avatar: "☀️", color: "#FFC93C" }
+  { login: "tanya",  email: "tanya@turkeytrip.app",  name: "Танюшка",     avatar: "🌴", color: "#FF7A59", avatarGradient: "sunset" },
+  { login: "lilu",   email: "lilu@turkeytrip.app",   name: "Лилу",        avatar: "🍹", color: "#2FD9C4", avatarGradient: "mint" },
+  { login: "nastya", email: "nastya@turkeytrip.app", name: "Анастасися",  avatar: "☀️", color: "#FFC93C", avatarGradient: "gold" }
 ];
+
+// Selectable avatar background gradients (key -> CSS var defined in style.css)
+const AVATAR_GRADIENTS = {
+  sunset: "var(--grad-sunset)",
+  gold:   "var(--grad-gold)",
+  ocean:  "var(--grad-ocean)",
+  citrus: "var(--grad-citrus)",
+  berry:  "var(--grad-berry)",
+  coral:  "var(--grad-coral)",
+  mint:   "var(--grad-mint)",
+  dusk:   "var(--grad-dusk)",
+};
+const DEFAULT_AVATAR_GRADIENT = "sunset";
+function gradCss(key) {
+  return AVATAR_GRADIENTS[key] || AVATAR_GRADIENTS[DEFAULT_AVATAR_GRADIENT];
+}
 
 const MOTIVATION_STEPS = [
   "Ещё немного, и на пляже ты будешь порхать как бабочка! 🦋",
@@ -225,10 +241,12 @@ function applyProfileOverrides() {
     if (o) {
       if (o.name) u.name = o.name;
       if (o.avatar) u.avatar = o.avatar;
+      if (o.avatarGradient) u.avatarGradient = o.avatarGradient;
       u.dailyGoal = o.dailyGoal || DAILY_STEP_GOAL;
     } else {
       u.dailyGoal = u.dailyGoal || DAILY_STEP_GOAL;
     }
+    u.avatarGradient = u.avatarGradient || DEFAULT_AVATAR_GRADIENT;
   });
 }
 
@@ -472,6 +490,7 @@ function logout() {
 function renderHome() {
   if (!currentUser) return;
   $("#homeAvatar").textContent = currentUser.avatar;
+  $("#homeAvatar").style.background = gradCss(currentUser.avatarGradient);
   $("#homeGreeting").textContent = `Привет, ${currentUser.name}!`;
 
   const streak = computeStreak(currentUser.login);
@@ -511,7 +530,7 @@ function renderHome() {
     const el = document.createElement("div");
     el.className = "mini-friend";
     el.innerHTML = `
-      <div class="avatar" style="background:${u.color}22;border:1px solid ${u.color}55">${u.avatar}</div>
+      <div class="avatar" style="background:${gradCss(u.avatarGradient)}">${u.avatar}</div>
       <div class="mf-name">${u.name}</div>
       <div class="mf-val">${nf(steps)}</div>`;
     miniWrap.appendChild(el);
@@ -544,8 +563,20 @@ function renderHistory() {
       : `<span class="hi-emoji">🏋️</span><span class="hi-main">${e.workoutType}, ${e.workoutMinutes} мин${e.workoutCalories ? `, ${nf(e.workoutCalories)} ккал` : ""} <span class="hi-date">· ${e.date}</span></span>`;
     li.innerHTML = `${mainHtml}<span class="hi-points">+${e.points}</span>
       <span class="hi-actions">
-        <button class="hi-edit" data-id="${e.id}" title="Изменить">✏️</button>
-        <button class="hi-delete" data-id="${e.id}" title="Удалить">🗑</button>
+        <button class="hi-edit" data-id="${e.id}" title="Изменить">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 20l.9-3.9a2 2 0 0 1 .53-.97L15.6 5c.8-.8 2.1-.8 2.9 0l.5.5c.8.8.8 2.1 0 2.9L8.87 18.57a2 2 0 0 1-.97.53L4 20z"/>
+            <path d="M14 6.5l3.5 3.5"/>
+          </svg>
+        </button>
+        <button class="hi-delete" data-id="${e.id}" title="Удалить">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M5 7h14"/>
+            <path d="M9.5 7V5.2A1.2 1.2 0 0 1 10.7 4h2.6a1.2 1.2 0 0 1 1.2 1.2V7"/>
+            <path d="M7 7l.8 12a1.6 1.6 0 0 0 1.6 1.5h5.2a1.6 1.6 0 0 0 1.6-1.5L17 7"/>
+            <path d="M10.3 11v6M13.7 11v6"/>
+          </svg>
+        </button>
       </span>`;
     el.appendChild(li);
   });
@@ -661,7 +692,7 @@ function buildFeed() {
       const text = e.type === "steps"
         ? `добавила ${nf(e.steps)} шагов 🚶`
         : `добавила тренировку: ${e.workoutType}, ${e.workoutMinutes} мин${e.workoutCalories ? `, ${nf(e.workoutCalories)} ккал` : ""} 🏋️`;
-      items.push({ id: e.id, login: u.login, name: u.name, avatar: u.avatar, color: u.color, text, ts: e.ts });
+      items.push({ id: e.id, login: u.login, name: u.name, avatar: u.avatar, color: u.color, avatarGradient: u.avatarGradient, text, ts: e.ts });
     });
   });
   items.sort((a, b) => b.ts - a.ts);
@@ -699,7 +730,7 @@ function renderFeed() {
 
     el.innerHTML = `
       <div class="feed-header">
-        <div class="avatar" style="background:${item.color}22;border:1px solid ${item.color}55">${item.avatar}</div>
+        <div class="avatar" style="background:${gradCss(item.avatarGradient)}">${item.avatar}</div>
         <div class="feed-header-text">
           <div class="feed-line"><b>${escapeHtml(item.name)}</b> ${item.text}</div>
           <div class="feed-time">${relativeTime(item.ts)}</div>
@@ -793,7 +824,7 @@ function renderTeam() {
     const row = document.createElement("div");
     row.className = "team-row";
     row.innerHTML = `
-      <div class="avatar" style="background:${u.color}22;border:1px solid ${u.color}55">${u.avatar}</div>
+      <div class="avatar" style="background:${gradCss(u.avatarGradient)}">${u.avatar}</div>
       <div class="tr-info">
         <div class="tr-name">${u.name}</div>
         <div class="tr-sub">${nf(t.totalSteps)} шагов · ${t.totalWorkouts} тренировок · 🔥${s.current}</div>
@@ -822,6 +853,7 @@ function renderAchievements() {
 // ---------- RENDER: PROFILE ----------
 function renderProfile() {
   $("#profileAvatar").textContent = currentUser.avatar;
+  $("#profileAvatar").style.background = gradCss(currentUser.avatarGradient);
   $("#profileName").textContent = currentUser.name;
   $("#profileLogin").textContent = "@" + currentUser.login;
   $("#profileGoal").textContent = `цель: ${nf(currentUser.dailyGoal || DAILY_STEP_GOAL)} шагов/день`;
@@ -934,7 +966,7 @@ function wireEvents() {
 
   $("#openStepsModal").addEventListener("click", () => {
     editingEntryId = null;
-    $("#stepsModalTitle").textContent = "Добавить шаги 🚶";
+    $("#stepsModalTitle").textContent = "Добавить шаги";
     $("#saveStepsBtn").textContent = "Сохранить";
     $("#stepsInput").value = "";
     $("#stepsDate").max = getTodayStr();
@@ -943,7 +975,7 @@ function wireEvents() {
   });
   $("#openWorkoutModal").addEventListener("click", () => {
     editingEntryId = null;
-    $("#workoutModalTitle").textContent = "Добавить тренировку 🏋️";
+    $("#workoutModalTitle").textContent = "Добавить тренировку";
     $("#saveWorkoutBtn").textContent = "Сохранить";
     $("#workoutMinutes").value = "";
     $("#workoutCalories").value = "";
@@ -1030,12 +1062,23 @@ function wireEvents() {
     chevron.classList.toggle("open", willOpen);
   });
 
+  function updateAvatarPreview() {
+    const avatar = ($("#avatarGrid .avatar-choice.selected") || {}).dataset?.avatar || currentUser.avatar;
+    const gradient = ($("#gradientGrid .gradient-choice.selected") || {}).dataset?.gradient || currentUser.avatarGradient;
+    $("#avatarPreview").textContent = avatar;
+    $("#avatarPreview").style.background = gradCss(gradient);
+  }
+
   $("#editProfileBtn").addEventListener("click", () => {
     $("#profileNameInput").value = currentUser.name;
     $("#profileGoalInput").value = currentUser.dailyGoal || DAILY_STEP_GOAL;
     document.querySelectorAll("#avatarGrid .avatar-choice").forEach((btn) => {
       btn.classList.toggle("selected", btn.dataset.avatar === currentUser.avatar);
     });
+    document.querySelectorAll("#gradientGrid .gradient-choice").forEach((btn) => {
+      btn.classList.toggle("selected", btn.dataset.gradient === (currentUser.avatarGradient || DEFAULT_AVATAR_GRADIENT));
+    });
+    updateAvatarPreview();
     openModal("profileModal");
   });
 
@@ -1044,6 +1087,15 @@ function wireEvents() {
     if (!btn) return;
     document.querySelectorAll("#avatarGrid .avatar-choice").forEach((b) => b.classList.remove("selected"));
     btn.classList.add("selected");
+    updateAvatarPreview();
+  });
+
+  $("#gradientGrid").addEventListener("click", (e) => {
+    const btn = e.target.closest(".gradient-choice");
+    if (!btn) return;
+    document.querySelectorAll("#gradientGrid .gradient-choice").forEach((b) => b.classList.remove("selected"));
+    btn.classList.add("selected");
+    updateAvatarPreview();
   });
 
   $("#saveProfileBtn").addEventListener("click", () => {
@@ -1051,11 +1103,13 @@ function wireEvents() {
     if (!name) return;
     const selectedAvatarBtn = $("#avatarGrid .avatar-choice.selected");
     const avatar = selectedAvatarBtn ? selectedAvatarBtn.dataset.avatar : currentUser.avatar;
+    const selectedGradientBtn = $("#gradientGrid .gradient-choice.selected");
+    const avatarGradient = selectedGradientBtn ? selectedGradientBtn.dataset.gradient : (currentUser.avatarGradient || DEFAULT_AVATAR_GRADIENT);
     let goal = parseInt($("#profileGoalInput").value, 10);
     if (!goal || goal < 1000) goal = DAILY_STEP_GOAL;
     if (goal > 30000) goal = 30000;
     closeModal("profileModal");
-    saveProfile(currentUser.login, { name, avatar, dailyGoal: goal });
+    saveProfile(currentUser.login, { name, avatar, avatarGradient, dailyGoal: goal });
     showToast("✏️", "Профиль обновлён!");
     rerenderCurrentTab();
   });

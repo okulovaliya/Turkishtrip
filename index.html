@@ -55,7 +55,6 @@
       <div class="countdown-chip" id="countdownChip">
         <span class="countdown-num" id="countdownNum">--</span>
         <span class="countdown-label">дней до Турции</span>
-        <span class="countdown-plane">✈️</span>
       </div>
 
       <div class="motivation-banner" id="dailyMotivation">
@@ -76,8 +75,8 @@
       </div>
 
       <div class="quick-actions">
-        <button class="btn btn-action" id="openStepsModal">🚶 Добавить шаги</button>
-        <button class="btn btn-action btn-action-alt" id="openWorkoutModal">🏋️ Добавить тренировку</button>
+        <button class="btn btn-action" id="openStepsModal">Добавить шаги</button>
+        <button class="btn btn-action btn-action-alt" id="openWorkoutModal">Добавить тренировку</button>
       </div>
 
       <div class="card">
@@ -93,6 +92,7 @@
         <div class="card-title">Статистика</div>
         <div class="chart-controls">
           <div class="segmented" id="metricSegmented">
+            <button class="seg-btn" type="button" data-metric="steps">Шаги</button>
             <button class="seg-btn active" type="button" data-metric="workouts">Тренировки</button>
             <button class="seg-btn" type="button" data-metric="points">Очки</button>
           </div>
@@ -211,18 +211,52 @@
 
     <!-- BOTTOM NAV -->
     <nav class="bottom-nav">
-      <button class="nav-btn active" data-tab="home"><span>🏠</span>Главная</button>
-      <button class="nav-btn" data-tab="feed"><span>📰</span>Лента</button>
-      <button class="nav-btn" data-tab="team"><span>👯</span>Команда</button>
-      <button class="nav-btn" data-tab="ach"><span>🏆</span>Награды</button>
-      <button class="nav-btn" data-tab="profile"><span>🙂</span>Профиль</button>
+      <button class="nav-btn active" data-tab="home" aria-label="Главная">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4 11.5 12 4l8 7.5"/>
+          <path d="M6 10.2V19a1 1 0 0 0 1 1h3v-5h4v5h3a1 1 0 0 0 1-1v-8.8"/>
+        </svg>
+        <span class="nav-label">Главная</span>
+      </button>
+      <button class="nav-btn" data-tab="feed" aria-label="Лента">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="4" y="5" width="12.5" height="13.5" rx="1.5"/>
+          <path d="M16.5 9h1.7A1.8 1.8 0 0 1 20 10.8V17a1.5 1.5 0 0 1-1.5 1.5H8"/>
+          <path d="M7 8.7h6.5M7 11.7h6.5M7 14.7h4"/>
+        </svg>
+        <span class="nav-label">Лента</span>
+      </button>
+      <button class="nav-btn" data-tab="team" aria-label="Команда">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="9" cy="8" r="2.6"/>
+          <circle cx="17" cy="9.2" r="2.1"/>
+          <path d="M3.5 19a5.5 5.5 0 0 1 11 0"/>
+          <path d="M14.7 19a4.4 4.4 0 0 1 5.8-4.2"/>
+        </svg>
+        <span class="nav-label">Команда</span>
+      </button>
+      <button class="nav-btn" data-tab="ach" aria-label="Награды">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M9 3.2 10.6 9.4M15 3.2 13.4 9.4"/>
+          <circle cx="12" cy="14.7" r="5.6"/>
+        </svg>
+        <span class="nav-label">Награды</span>
+      </button>
+      <button class="nav-btn" data-tab="profile" aria-label="Профиль">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="8.5"/>
+          <circle cx="12" cy="10" r="2.3"/>
+          <path d="M7 17.3a5.3 5.3 0 0 1 10 0"/>
+        </svg>
+        <span class="nav-label">Профиль</span>
+      </button>
     </nav>
   </section>
 
   <!-- STEPS MODAL -->
   <div class="modal-backdrop" id="stepsModal" hidden>
     <div class="modal">
-      <div class="modal-title" id="stepsModalTitle">Добавить шаги 🚶</div>
+      <div class="modal-title" id="stepsModalTitle">Добавить шаги</div>
       <input type="number" id="stepsInput" class="modal-input" placeholder="Например, 6500" min="1" max="60000">
       <label class="field">
         <span>Дата</span>
@@ -238,7 +272,7 @@
   <!-- WORKOUT MODAL -->
   <div class="modal-backdrop" id="workoutModal" hidden>
     <div class="modal">
-      <div class="modal-title" id="workoutModalTitle">Добавить тренировку 🏋️</div>
+      <div class="modal-title" id="workoutModalTitle">Добавить тренировку</div>
       <select id="workoutType" class="modal-input">
         <option value="Кардио">🏃 Кардио</option>
         <option value="Плавание">🏊 Плавание</option>
@@ -265,21 +299,39 @@
     <div class="modal">
       <div class="modal-title">Изменить профиль ✏️</div>
 
+      <div class="avatar-preview-wrap">
+        <div class="avatar avatar-lg" id="avatarPreview">🐬</div>
+      </div>
+
       <label class="field">
         <span>Аватар</span>
         <div class="avatar-grid" id="avatarGrid">
-          <button type="button" class="avatar-choice" data-avatar="🌴">🌴</button>
-          <button type="button" class="avatar-choice" data-avatar="🍹">🍹</button>
-          <button type="button" class="avatar-choice" data-avatar="☀️">☀️</button>
-          <button type="button" class="avatar-choice" data-avatar="🏖️">🏖️</button>
           <button type="button" class="avatar-choice" data-avatar="🐬">🐬</button>
-          <button type="button" class="avatar-choice" data-avatar="🦩">🦩</button>
-          <button type="button" class="avatar-choice" data-avatar="🍉">🍉</button>
-          <button type="button" class="avatar-choice" data-avatar="🌺">🌺</button>
-          <button type="button" class="avatar-choice" data-avatar="🕶️">🕶️</button>
-          <button type="button" class="avatar-choice" data-avatar="🦋">🦋</button>
+          <button type="button" class="avatar-choice" data-avatar="🌼">🌼</button>
+          <button type="button" class="avatar-choice" data-avatar="🍺">🍺</button>
+          <button type="button" class="avatar-choice" data-avatar="🍹">🍹</button>
           <button type="button" class="avatar-choice" data-avatar="🍸">🍸</button>
+          <button type="button" class="avatar-choice" data-avatar="🏔️">🏔️</button>
           <button type="button" class="avatar-choice" data-avatar="🌊">🌊</button>
+          <button type="button" class="avatar-choice" data-avatar="🇹🇷">🇹🇷</button>
+          <button type="button" class="avatar-choice" data-avatar="🦋">🦋</button>
+          <button type="button" class="avatar-choice" data-avatar="🤍">🤍</button>
+          <button type="button" class="avatar-choice" data-avatar="🥽">🥽</button>
+          <button type="button" class="avatar-choice" data-avatar="🌠">🌠</button>
+        </div>
+      </label>
+
+      <label class="field">
+        <span>Цвет фона</span>
+        <div class="gradient-grid" id="gradientGrid">
+          <button type="button" class="gradient-choice" data-gradient="sunset" aria-label="Закат"></button>
+          <button type="button" class="gradient-choice" data-gradient="gold" aria-label="Золото"></button>
+          <button type="button" class="gradient-choice" data-gradient="ocean" aria-label="Океан"></button>
+          <button type="button" class="gradient-choice" data-gradient="citrus" aria-label="Цитрус"></button>
+          <button type="button" class="gradient-choice" data-gradient="berry" aria-label="Ягода"></button>
+          <button type="button" class="gradient-choice" data-gradient="coral" aria-label="Коралл"></button>
+          <button type="button" class="gradient-choice" data-gradient="mint" aria-label="Мята"></button>
+          <button type="button" class="gradient-choice" data-gradient="dusk" aria-label="Сумерки"></button>
         </div>
       </label>
 
