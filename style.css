@@ -1,17 +1,25 @@
 :root {
   color-scheme: dark;
-  --bg: #0B0D14;
-  --bg-2: #12151F;
-  --card: #171B27;
-  --card-border: #262B3A;
-  --text: #F4F5F7;
-  --text-dim: #9AA0B2;
-  --coral: #FF7A59;
-  --teal: #2FD9C4;
-  --gold: #FFC93C;
-  --pink: #FF5FA2;
+  --bg: #0E0E0E;
+  --bg-2: #181818;
+  --card: #1B1B1B;
+  --card-border: #2C2C2C;
+  --text: #F5F5F1;
+  --text-dim: #9C9C95;
+  --coral: #FF9F40;
+  --teal: #B7E14D;
+  --gold: #FFB020;
+  --pink: #FFD65C;
   --danger: #FF5C5C;
   --radius: 20px;
+  /* Primary/secondary brand accents (Kalo-style lime + amber) — used for UI chrome only,
+     kept separate from the avatar picker gradients below so avatar colors stay untouched. */
+  --brand-primary: #B7E14D;
+  --brand-primary-dim: #8FBF3C;
+  --brand-secondary: #FFB020;
+  --brand-secondary-dim: #FF8A3D;
+  --grad-brand: linear-gradient(135deg, var(--brand-primary) 0%, var(--brand-primary-dim) 100%);
+  --grad-brand-amber: linear-gradient(135deg, var(--brand-secondary) 0%, var(--brand-secondary-dim) 100%);
   --grad-sunset: linear-gradient(135deg, #FF7A59 0%, #FF5FA2 50%, #2FD9C4 100%);
   --grad-gold: linear-gradient(135deg, #FFC93C 0%, #FF7A59 100%);
   --grad-ocean: linear-gradient(135deg, #1CA7C4, #0B5C7A);
@@ -43,7 +51,7 @@ body {
   width: 100%;
   max-width: 460px;
   min-height: 100vh;
-  background: radial-gradient(circle at 20% 0%, #171b2a 0%, var(--bg) 55%);
+  background: radial-gradient(circle at 20% 0%, #1A1A1A 0%, var(--bg) 55%);
   position: relative;
   overflow-x: hidden;
 }
@@ -77,7 +85,7 @@ body {
 .login-hero h1 {
   font-size: 30px;
   margin: 0 0 6px;
-  background: var(--grad-sunset);
+  background: var(--grad-brand);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
@@ -175,7 +183,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 .btn:active { transform: scale(0.97); }
 .btn-block { width: 100%; }
-.btn-primary { background: var(--grad-sunset); color: #10121A; }
+.btn-primary { background: var(--grad-brand); color: #10121A; }
 .btn-secondary { background: var(--bg-2); color: var(--text); border: 1px solid var(--card-border); }
 .btn-action {
   flex: 1;
@@ -185,7 +193,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   padding: 16px 10px;
   font-size: 14px;
 }
-.btn-action-alt { background: linear-gradient(135deg, rgba(255,122,89,0.18), rgba(255,95,162,0.18)); border-color: rgba(255,122,89,0.35); }
+.btn-action-alt { background: linear-gradient(135deg, rgba(255,176,32,0.18), rgba(183,225,77,0.14)); border-color: rgba(255,176,32,0.35); }
 
 /* ===== APP HEADER ===== */
 .app-header {
@@ -200,7 +208,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .avatar {
   width: 46px; height: 46px;
   border-radius: 50%;
-  background: var(--grad-sunset);
+  background: var(--grad-brand);
   display: flex; align-items: center; justify-content: center;
   font-size: 22px;
 }
@@ -222,7 +230,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 /* ===== COUNTDOWN ===== */
 .countdown-chip {
   margin: 4px 20px 18px;
-  background: var(--grad-gold);
+  background: var(--grad-brand-amber);
   border-radius: 16px;
   padding: 12px 16px;
   display: flex;
@@ -237,8 +245,8 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 /* ===== DAILY MOTIVATION ===== */
 .motivation-banner {
   margin: 0 20px 18px;
-  background: linear-gradient(135deg, rgba(47,217,196,0.16), rgba(255,95,162,0.16));
-  border: 1px solid rgba(47,217,196,0.35);
+  background: linear-gradient(135deg, rgba(183,225,77,0.16), rgba(255,176,32,0.14));
+  border: 1px solid rgba(183,225,77,0.35);
   border-radius: 16px;
   padding: 13px 16px;
   display: flex;
@@ -293,6 +301,22 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 .card-title { font-size: 14px; font-weight: 700; margin-bottom: 12px; color: var(--text); }
 
+.chart-card {
+  background: radial-gradient(120% 140% at 15% 0%, #1C1C1C 0%, #151515 55%, #0D0D0D 100%);
+  overflow: hidden;
+}
+.chart-card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.chart-card-header .card-title {
+  margin-bottom: 0;
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.chart-card-icon { width: 18px; height: 18px; color: #B7E14D; flex-shrink: 0; }
+.chart-canvas-wrap { margin: 0 -4px; }
+
 .chart-controls { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
 .segmented {
   display: flex;
@@ -313,7 +337,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   border-radius: 9px;
   cursor: pointer;
 }
-.seg-btn.active { background: var(--grad-sunset); color: #10121A; }
+.seg-btn.active { background: var(--grad-brand); color: #10121A; }
 .segmented-sm .seg-btn { font-size: 11.5px; padding: 7px 4px; }
 
 .team-bar-track {
@@ -325,7 +349,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .team-bar-fill {
   height: 100%;
   width: 0%;
-  background: var(--grad-sunset);
+  background: var(--grad-brand);
   border-radius: 999px;
   transition: width 0.5s ease;
 }
@@ -397,7 +421,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   align-items: center;
   gap: 4px;
 }
-.reaction-btn.active { background: rgba(255, 201, 60, 0.16); border-color: var(--gold); color: var(--text); }
+.reaction-btn.active { background: rgba(255, 176, 32, 0.16); border-color: var(--gold); color: var(--text); }
 .reaction-btn:active { transform: scale(0.94); }
 .reaction-count { font-size: 11px; font-weight: 700; }
 
@@ -443,7 +467,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 .feed-comment-input:focus { border-color: var(--teal); }
 .feed-comment-btn {
-  background: var(--grad-sunset);
+  background: var(--grad-brand);
   border: none;
   border-radius: 10px;
   width: 38px;
@@ -523,7 +547,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   opacity: 0.4;
   filter: grayscale(1);
 }
-.badge.unlocked { opacity: 1; filter: none; border-color: rgba(255,201,60,0.4); box-shadow: 0 0 0 1px rgba(255,201,60,0.15); }
+.badge.unlocked { opacity: 1; filter: none; border-color: rgba(255,176,32,0.4); box-shadow: 0 0 0 1px rgba(255,176,32,0.15); }
 .badge-emoji { font-size: 30px; margin-bottom: 8px; }
 .badge-name { font-size: 12.5px; font-weight: 700; }
 .badge-desc { font-size: 10.5px; color: var(--text-dim); margin-top: 4px; }
@@ -544,7 +568,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   border: 1px solid var(--card-border);
   color: var(--text-dim);
 }
-.sync-badge.cloud { color: var(--teal); border-color: rgba(47,217,196,0.4); background: rgba(47,217,196,0.1); }
+.sync-badge.cloud { color: var(--teal); border-color: rgba(183,225,77,0.4); background: rgba(183,225,77,0.1); }
 
 .stat-grid {
   display: grid;
@@ -584,7 +608,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 .avatar-choice.selected {
   border-color: var(--gold);
-  background: rgba(255, 201, 60, 0.15);
+  background: rgba(255, 176, 32, 0.15);
   box-shadow: 0 0 0 1px var(--gold);
   transform: scale(1.05);
 }
@@ -615,7 +639,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .gradient-choice[data-gradient="dusk"]   { background: var(--grad-dusk); }
 .gradient-choice.selected {
   border-color: var(--gold);
-  box-shadow: 0 0 0 2px rgba(255, 201, 60, 0.35);
+  box-shadow: 0 0 0 2px rgba(255, 176, 32, 0.35);
   transform: scale(1.12);
 }
 
@@ -632,7 +656,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  background: rgba(23, 27, 39, 0.55);
+  background: rgba(26, 26, 26, 0.55);
   backdrop-filter: blur(24px) saturate(180%);
   -webkit-backdrop-filter: blur(24px) saturate(180%);
   border: 1px solid rgba(255, 255, 255, 0.09);
@@ -642,10 +666,10 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 .nav-btn {
   flex: 0 0 auto;
-  width: 46px;
-  height: 46px;
+  width: 50px;
+  height: 50px;
   padding: 0;
-  border-radius: 16px;
+  border-radius: 17px;
   background: none;
   border: none;
   color: var(--text-dim);
@@ -657,7 +681,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   overflow: hidden;
   transition: background 0.25s ease, box-shadow 0.25s ease, color 0.25s ease, width 0.25s ease, padding 0.25s ease;
 }
-.nav-btn .nav-icon { width: 21px; height: 21px; flex: 0 0 auto; display: block; }
+.nav-btn .nav-icon { width: 25px; height: 25px; flex: 0 0 auto; display: block; }
 .nav-btn .nav-label {
   display: inline-block;
   max-width: 0;
@@ -670,16 +694,16 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 .nav-btn.active {
   width: auto;
-  padding: 0 16px 0 14px;
-  color: var(--text);
-  background: radial-gradient(circle, rgba(255, 201, 60, 0.24) 0%, rgba(255, 122, 89, 0.08) 65%, transparent 100%);
+  padding: 0 18px 0 16px;
+  color: #D4EE8C;
+  background: radial-gradient(circle, rgba(183, 225, 77, 0.26) 0%, rgba(143, 191, 60, 0.09) 65%, transparent 100%);
   box-shadow:
-    0 0 0 1px rgba(255, 201, 60, 0.4),
-    0 0 16px 3px rgba(255, 201, 60, 0.4),
-    0 0 30px 9px rgba(255, 122, 89, 0.22);
+    0 0 0 1px rgba(183, 225, 77, 0.42),
+    0 0 16px 3px rgba(183, 225, 77, 0.4),
+    0 0 30px 9px rgba(143, 191, 60, 0.2);
 }
 .nav-btn.active .nav-label {
-  max-width: 100px;
+  max-width: 120px;
   opacity: 1;
 }
 
@@ -716,7 +740,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   transform: translateX(-50%);
   max-width: 380px;
   width: calc(100% - 48px);
-  background: var(--grad-sunset);
+  background: var(--grad-brand);
   color: #10121A;
   border-radius: 16px;
   padding: 14px 16px;
