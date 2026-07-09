@@ -103,12 +103,28 @@
       </div>
 
       <div class="card">
-        <div class="card-title">Прогресс команды сегодня</div>
+        <div class="card-title-row">
+          <div class="card-title">Прогресс команды</div>
+          <div class="friend-stack" id="miniFriends"></div>
+        </div>
+
+        <div class="team-bar-label team-bar-label-first">Шаги сегодня</div>
         <div class="team-bar-track">
           <div class="team-bar-fill" id="teamBarFill"></div>
         </div>
         <div class="team-bar-caption" id="teamBarCaption">0 из 24 000 шагов</div>
-        <div class="mini-friends" id="miniFriends"></div>
+
+        <div class="team-bar-label-row">
+          <span class="team-bar-label">Активность на этой неделе</span>
+          <button type="button" class="info-i-btn" id="activityInfoToggle" aria-label="Как считается активность">i</button>
+        </div>
+        <div class="team-bar-info-body" id="activityInfoBody" hidden>
+          ВОЗ рекомендует 150 мин умеренной или 75 мин интенсивной нагрузки в неделю. Минуты интенсивной нагрузки (кардио, плавание) считаются вдвойне.
+        </div>
+        <div class="team-bar-track">
+          <div class="team-bar-fill" id="teamWorkoutBarFill"></div>
+        </div>
+        <div class="team-bar-caption" id="teamWorkoutBarCaption">0 из 450 мин</div>
       </div>
 
       <div class="card chart-card">
