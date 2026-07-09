@@ -5,6 +5,9 @@
 // ---------- CONFIG ----------
 const TRIP_DATE = new Date('2026-08-28T00:00:00');
 const DAILY_STEP_GOAL = 8000;
+// WHO guideline: 150 min/week of moderate activity, or 75 min/week of vigorous activity,
+// or an equivalent combination (vigorous minutes count double toward this target).
+const WEEKLY_ACTIVITY_GOAL_MIN = 150;
 
 // Fallback copy of users.json in case fetch fails (e.g. opened via file://)
 // No passwords are stored anywhere — Firebase Authentication owns those.
@@ -165,6 +168,43 @@ const WORKOUT_POINT_RATES = {
 function pointsForWorkout(min, type) {
   const rate = WORKOUT_POINT_RATES[type] ?? 2;
   return Math.round(min * rate);
+}
+
+// Classifies each workout type as WHO-style "moderate" or "vigorous" intensity,
+// used to turn logged minutes into WHO-equivalent weekly activity minutes.
+const WORKOUT_INTENSITY = {
+  "Кардио": "vigorous",
+  "Плавание": "vigorous",
+  "Силовая": "moderate",
+  "Танцы": "moderate",
+  "Прогулка": "moderate",
+  "Йога": "moderate"
+};
+// Monday of the week containing d (WHO's 150/75-min targets are weekly).
+function startOfWeek(d) {
+  const x = startOfDay(d);
+  const day = x.getDay(); // 0 = Sunday .. 6 = Saturday
+  const diff = day === 0 ? -6 : 1 - day;
+  x.setDate(x.getDate() + diff);
+  return x;
+}
+// Sums this week's (Mon -> today) workout minutes into WHO-equivalent moderate minutes:
+// vigorous-intensity minutes count double, matching the WHO "150 moderate OR 75 vigorous
+// OR an equivalent combination" guideline.
+function weeklyActivityMinutes(login) {
+  const agg = dailyAggregates(login);
+  const monday = startOfWeek(new Date());
+  const today = startOfDay(new Date());
+  let total = 0;
+  for (let d = new Date(monday); d <= today; d.setDate(d.getDate() + 1)) {
+    const day = agg[formatDate(d)];
+    if (!day || !day.workouts) continue;
+    day.workouts.forEach((w) => {
+      const intensity = WORKOUT_INTENSITY[w.type] || "moderate";
+      total += intensity === "vigorous" ? w.minutes * 2 : w.minutes;
+    });
+  }
+  return total;
 }
 function randomId() { return Date.now() + "-" + Math.random().toString(36).slice(2, 8); }
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
@@ -536,22 +576,26 @@ function renderHome() {
   $("#teamBarFill").style.width = (teamFrac * 100) + "%";
   $("#teamBarCaption").textContent = `${nf(team.todaySteps)} из ${nf(teamGoal)} шагов`;
 
-  const miniWrap = $("#miniFriends");
-  miniWrap.innerHTML = "";
-  USERS.forEach((u) => {
-    const uAgg = dailyAggregates(u.login);
-    const steps = (uAgg[getTodayStr()] && uAgg[getTodayStr()].steps) || 0;
-    const el = document.createElement("div");
-    el.className = "mini-friend";
-    el.innerHTML = `
-      <div class="avatar" style="background:${gradCss(u.avatarGradient)}"><img class="avatar-icon-img" src="${avatarSrc(u.avatar)}" alt=""></div>
-      <div class="mf-name">${u.name}</div>
-      <div class="mf-val">${nf(steps)}</div>`;
-    miniWrap.appendChild(el);
-  });
+  const teamActivityGoal = WEEKLY_ACTIVITY_GOAL_MIN * USERS.length;
+  const teamActivityMin = USERS.reduce((sum, u) => sum + weeklyActivityMinutes(u.login), 0);
+  const teamActivityFrac = Math.max(0, Math.min(1, teamActivityMin / teamActivityGoal));
+  $("#teamWorkoutBarFill").style.width = (teamActivityFrac * 100) + "%";
+  $("#teamWorkoutBarCaption").textContent = `${nf(teamActivityMin)} из ${nf(teamActivityGoal)} мин`;
+
+  renderFriendStack();
 
   renderHistory();
   renderWeekChart();
+}
+
+// Overlapping avatar cluster shown next to the "Прогресс команды" title.
+function renderFriendStack() {
+  const wrap = $("#miniFriends");
+  if (!wrap) return;
+  wrap.innerHTML = USERS.map((u) => `
+    <div class="friend-stack-avatar">
+      <div class="avatar" style="background:${gradCss(u.avatarGradient)}"><img class="avatar-icon-img" src="${avatarSrc(u.avatar)}" alt=""></div>
+    </div>`).join("");
 }
 
 function daysWord(n) {
@@ -1273,6 +1317,11 @@ function wireEvents() {
     const willOpen = body.hidden;
     body.hidden = !willOpen;
     chevron.classList.toggle("open", willOpen);
+  });
+
+  $("#activityInfoToggle").addEventListener("click", () => {
+    const body = $("#activityInfoBody");
+    body.hidden = !body.hidden;
   });
 
   function updateAvatarPreview() {
