@@ -335,7 +335,7 @@ function buildBuckets(login, period, metric) {
         const ds = formatDate(d);
         if (agg[ds]) sum += agg[ds][metricKey];
       }
-      labels.push(`${pad(start.getDate())}.${pad(start.getMonth() + 1)}`);
+      labels.push(`${pad(start.getDate())}.${pad(start.getMonth() + 1)}–${pad(end.getDate())}.${pad(end.getMonth() + 1)}`);
       values.push(sum);
     }
     return { labels, values };
@@ -749,16 +749,8 @@ function renderTrendBadge(elId, pctElId, thisWeek, lastWeek) {
   pctEl.classList.toggle("down", pct < 0);
 }
 
-function computePeakIndices(values, excludeIdx, max = 2) {
-  return values
-    .map((v, i) => ({ v, i }))
-    .filter((o) => o.v > 0 && o.i !== excludeIdx)
-    .sort((a, b) => b.v - a.v)
-    .slice(0, max)
-    .map((o) => o.i);
-}
-
-// Draws the numeric value above the "today" point and any highlighted peak points
+// Draws the numeric value above every point that actually has data, so it's always
+// clear which days/weeks had activity — no more "random" highlighting of just a couple points.
 const valueLabelsPlugin = {
   id: "valueLabels",
   afterDatasetsDraw(chart) {
@@ -766,50 +758,17 @@ const valueLabelsPlugin = {
     if (!meta || !meta.data || !meta.data.length) return;
     const values = chart.data.datasets[0].data;
     const lastIdx = values.length - 1;
-    const idxs = new Set(chart.data.peakIndices || []);
-    idxs.add(lastIdx);
     const { ctx } = chart;
     ctx.save();
     ctx.font = "700 11px -apple-system, BlinkMacSystemFont, sans-serif";
     ctx.textAlign = "center";
-    idxs.forEach((i) => {
+    values.forEach((v, i) => {
+      if (!v) return; // skip empty days/weeks — nothing to label
       const pt = meta.data[i];
-      if (!pt || !values[i]) return;
+      if (!pt) return;
       const isToday = i === lastIdx;
       ctx.fillStyle = isToday ? "#FFB020" : "#CFE38A";
-      ctx.fillText(nf(values[i]), pt.x, Math.max(12, pt.y - 12));
-    });
-    ctx.restore();
-  }
-};
-
-// Draws soft rounded highlight bars behind "peak" x-positions, chart.data.peakIndices
-const peakBarsPlugin = {
-  id: "peakBars",
-  beforeDatasetsDraw(chart) {
-    const idxs = chart.data.peakIndices;
-    if (!idxs || !idxs.length) return;
-    const { ctx, chartArea, scales } = chart;
-    if (!chartArea || !scales.x) return;
-    const xScale = scales.x;
-    const count = chart.data.labels.length || 1;
-    const barW = Math.max(16, (chartArea.right - chartArea.left) / count * 0.5);
-    ctx.save();
-    idxs.forEach((i) => {
-      const cx = xScale.getPixelForValue(i);
-      const x = cx - barW / 2;
-      const y = chartArea.top;
-      const h = chartArea.bottom - chartArea.top;
-      const r = 9;
-      ctx.beginPath();
-      ctx.moveTo(x + r, y);
-      ctx.arcTo(x + barW, y, x + barW, y + h, r);
-      ctx.arcTo(x + barW, y + h, x, y + h, r);
-      ctx.arcTo(x, y + h, x, y, r);
-      ctx.arcTo(x, y, x + barW, y, r);
-      ctx.closePath();
-      ctx.fillStyle = "rgba(255, 176, 32, 0.12)";
-      ctx.fill();
+      ctx.fillText(nf(v), pt.x, Math.max(12, pt.y - 12));
     });
     ctx.restore();
   }
@@ -831,17 +790,18 @@ function renderWeekChart() {
   fillGrad.addColorStop(1, hexToRgba(accent, 0));
 
   const lastIdx = values.length - 1;
-  const pointRadius = values.map((_, i) => (i === lastIdx ? 5 : 0));
-  const pointHoverRadius = values.map((_, i) => (i === lastIdx ? 6 : 5));
+  // Every day/week that actually has data gets a visible dot; "today" (or the current
+  // week/month) is always marked, even at zero, so it's clear where "now" is on the line.
+  const pointRadius = values.map((v, i) => (i === lastIdx ? 5 : v > 0 ? 3.5 : 0));
+  const pointHoverRadius = values.map((v, i) => (i === lastIdx ? 6 : v > 0 ? 5 : 4));
   const pointHitRadius = values.map(() => 14);
-  const peakIndices = computePeakIndices(values, lastIdx);
+  const pointBackgroundColor = values.map((_, i) => (i === lastIdx ? "#FFB020" : accent));
   const unit = metricLabel(chartMetric);
 
   weekChartInstance = new Chart(ctx, {
     type: "line",
     data: {
       labels,
-      peakIndices,
       datasets: [{
         label: unit,
         data: values,
@@ -853,7 +813,7 @@ function renderWeekChart() {
         pointRadius,
         pointHoverRadius,
         pointHitRadius,
-        pointBackgroundColor: "#FFB020",
+        pointBackgroundColor,
         pointBorderColor: "#fff",
         pointBorderWidth: 2
       }]
@@ -882,7 +842,7 @@ function renderWeekChart() {
         y: { display: false, grid: { display: false } }
       }
     },
-    plugins: [peakBarsPlugin, valueLabelsPlugin]
+    plugins: [valueLabelsPlugin]
   });
 }
 
@@ -1006,7 +966,7 @@ function renderTeam() {
       const bucket = buildBuckets(u.login, teamChartPeriod, teamChartMetric);
       labels = bucket.labels;
       const lastIdx = bucket.values.length - 1;
-      const pointRadius = bucket.values.map((_, i) => (i === lastIdx ? 4 : 0));
+      const pointRadius = bucket.values.map((v, i) => (i === lastIdx ? 4 : v > 0 ? 3 : 0));
       const pointHitRadius = bucket.values.map(() => 12);
       const teamColor = TEAM_CHART_COLORS[u.login] || u.color;
       const lineColor = teamColor;
