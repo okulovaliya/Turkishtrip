@@ -213,6 +213,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   font-size: 22px;
 }
 .avatar-lg { width: 76px; height: 76px; font-size: 36px; margin: 0 auto 10px; }
+.avatar-icon-img { width: 90%; height: 90%; object-fit: contain; display: block; }
 
 .greet { font-weight: 700; font-size: 16px; }
 .streak { color: var(--gold); font-size: 12.5px; margin-top: 2px; }
@@ -663,7 +664,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
 .avatar-grid {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 8px;
 }
 .avatar-choice {
@@ -671,13 +672,13 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   background: var(--bg-2);
   border: 1px solid var(--card-border);
   border-radius: 12px;
-  font-size: 20px;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: transform 0.15s ease, box-shadow 0.2s ease, border-color 0.2s ease;
 }
+.avatar-choice-img { width: 88%; height: 88%; object-fit: contain; display: block; }
 .avatar-choice.selected {
   border-color: var(--gold);
   background: rgba(255, 176, 32, 0.15);

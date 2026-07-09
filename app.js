@@ -18,10 +18,17 @@ const TEAM_CHART_COLORS = {
 };
 
 const FALLBACK_USERS = [
-  { login: "tanya",  email: "tanya@turkeytrip.app",  name: "Танюшка",     avatar: "🌴", color: "#FF7A59", avatarGradient: "sunset" },
-  { login: "lilu",   email: "lilu@turkeytrip.app",   name: "Лилу",        avatar: "🍹", color: "#2FD9C4", avatarGradient: "mint" },
-  { login: "nastya", email: "nastya@turkeytrip.app", name: "Анастасися",  avatar: "☀️", color: "#FFC93C", avatarGradient: "gold" }
+  { login: "tanya",  email: "tanya@turkeytrip.app",  name: "Танюшка",     avatar: "face3", color: "#FF7A59", avatarGradient: "sunset" },
+  { login: "lilu",   email: "lilu@turkeytrip.app",   name: "Лилу",        avatar: "face2", color: "#2FD9C4", avatarGradient: "mint" },
+  { login: "nastya", email: "nastya@turkeytrip.app", name: "Анастасися",  avatar: "face4", color: "#FFC93C", avatarGradient: "gold" }
 ];
+
+// Avatar keys -> custom PNG sticker (stored in /avatars). Replaces the earlier emoji/SVG-icon avatars.
+const AVATAR_ICON_KEYS = ["face1", "face2", "face3", "face4", "face5", "face6", "face7", "face8"];
+function avatarSrc(key) {
+  const safe = AVATAR_ICON_KEYS.includes(key) ? key : "face1";
+  return `avatars/${safe}.png`;
+}
 
 // Selectable avatar background gradients (key -> CSS var defined in style.css)
 const AVATAR_GRADIENTS = {
@@ -498,7 +505,7 @@ function logout() {
 // ---------- RENDER: HOME ----------
 function renderHome() {
   if (!currentUser) return;
-  $("#homeAvatar").textContent = currentUser.avatar;
+  $("#homeAvatarImg").src = avatarSrc(currentUser.avatar);
   $("#homeAvatar").style.background = gradCss(currentUser.avatarGradient);
   $("#homeGreeting").textContent = `Привет, ${currentUser.name}!`;
 
@@ -537,7 +544,7 @@ function renderHome() {
     const el = document.createElement("div");
     el.className = "mini-friend";
     el.innerHTML = `
-      <div class="avatar" style="background:${gradCss(u.avatarGradient)}">${u.avatar}</div>
+      <div class="avatar" style="background:${gradCss(u.avatarGradient)}"><img class="avatar-icon-img" src="${avatarSrc(u.avatar)}" alt=""></div>
       <div class="mf-name">${u.name}</div>
       <div class="mf-val">${nf(steps)}</div>`;
     miniWrap.appendChild(el);
@@ -927,7 +934,7 @@ function renderFeed() {
 
     el.innerHTML = `
       <div class="feed-header">
-        <div class="avatar" style="background:${gradCss(item.avatarGradient)}">${item.avatar}</div>
+        <div class="avatar" style="background:${gradCss(item.avatarGradient)}"><img class="avatar-icon-img" src="${avatarSrc(item.avatar)}" alt=""></div>
         <div class="feed-header-text">
           <div class="feed-line"><b>${escapeHtml(item.name)}</b> ${item.text}</div>
           <div class="feed-time">${relativeTime(item.ts)}</div>
@@ -1070,7 +1077,7 @@ function renderTeam() {
     const row = document.createElement("div");
     row.className = "team-row";
     row.innerHTML = `
-      <div class="avatar" style="background:${gradCss(u.avatarGradient)}">${u.avatar}</div>
+      <div class="avatar" style="background:${gradCss(u.avatarGradient)}"><img class="avatar-icon-img" src="${avatarSrc(u.avatar)}" alt=""></div>
       <div class="tr-info">
         <div class="tr-name">${u.name}</div>
         <div class="tr-sub">${nf(t.totalSteps)} шагов · ${t.totalWorkouts} тренировок · 🔥${s.current}</div>
@@ -1098,7 +1105,7 @@ function renderAchievements() {
 
 // ---------- RENDER: PROFILE ----------
 function renderProfile() {
-  $("#profileAvatar").textContent = currentUser.avatar;
+  $("#profileAvatarImg").src = avatarSrc(currentUser.avatar);
   $("#profileAvatar").style.background = gradCss(currentUser.avatarGradient);
   $("#profileName").textContent = currentUser.name;
   $("#profileLogin").textContent = "@" + currentUser.login;
@@ -1311,7 +1318,7 @@ function wireEvents() {
   function updateAvatarPreview() {
     const avatar = ($("#avatarGrid .avatar-choice.selected") || {}).dataset?.avatar || currentUser.avatar;
     const gradient = ($("#gradientGrid .gradient-choice.selected") || {}).dataset?.gradient || currentUser.avatarGradient;
-    $("#avatarPreview").textContent = avatar;
+    $("#avatarPreviewImg").src = avatarSrc(avatar);
     $("#avatarPreview").style.background = gradCss(gradient);
   }
 
