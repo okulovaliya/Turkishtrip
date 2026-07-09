@@ -273,12 +273,19 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   flex-shrink: 0;
   filter: drop-shadow(0 0 5px rgba(183, 225, 77, 0.55));
 }
+.stat-square-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text);
+  text-align: center;
+}
 .stat-square-sub {
   font-size: 10.5px;
   font-weight: 600;
   color: var(--text-dim);
   text-align: center;
   letter-spacing: 0.02em;
+  margin-top: -3px;
 }
 
 .mini-ring { position: relative; width: 96px; height: 96px; flex-shrink: 0; margin: 2px 0; }
