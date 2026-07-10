@@ -383,7 +383,10 @@ async function loadUsersData() {
 // attach, so nobody reads a half-migrated team node.
 async function migrateLegacyDataIfNeeded() {
   const migratedSnap = await db.ref(teamPath("meta/migrated")).once("value");
-  if (migratedSnap.val()) return;
+  if (migratedSnap.val()) {
+    await backfillLegacyTeamFields();
+    return;
+  }
 
   const [actSnap, comSnap, reactSnap, profSnap] = await Promise.all([
     db.ref("activities").once("value"),
@@ -414,6 +417,39 @@ async function migrateLegacyDataIfNeeded() {
   });
 
   await db.ref().update(updates);
+}
+
+// Covers a team whose meta/migrated was already set to true by an earlier
+// version of migrateLegacyDataIfNeeded — one that ran before destination/
+// status/inviteCode/member-roles existed as concepts, so it left that team
+// meta half-filled (e.g. just name/tripDate/createdAt/migrated, nothing
+// else). Safe to call every time: only fills in fields that are still
+// missing, never touches anything already set, so it can't clobber a
+// destination or role someone has since changed by hand.
+async function backfillLegacyTeamFields() {
+  const [metaSnap, membersSnap] = await Promise.all([
+    db.ref(teamPath("meta")).once("value"),
+    db.ref(teamPath("members")).once("value")
+  ]);
+  const meta = metaSnap.val() || {};
+  const members = membersSnap.val() || {};
+  const updates = {};
+
+  if (!meta.status) updates[teamPath("meta/status")] = "active";
+  if (!meta.destination) updates[teamPath("meta/destination")] = "Турции";
+  if (!meta.inviteCode) {
+    const inviteCode = randomCode(6);
+    updates[teamPath("meta/inviteCode")] = inviteCode;
+    updates[`inviteCodes/${inviteCode}`] = activeTeamId;
+  }
+  // lilu is the designated owner from the original 3; anyone else without a
+  // role yet (shouldn't normally happen for this team) becomes a member.
+  Object.entries(members).forEach(([login, m]) => {
+    if (m && m.role) return;
+    updates[teamPath(`members/${login}/role`)] = login === "lilu" ? "owner" : "member";
+  });
+
+  if (Object.keys(updates).length) await db.ref().update(updates);
 }
 
 // ---------- TEAMS: create / join / resolve ----------
