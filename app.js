@@ -2,8 +2,70 @@
    Turkey Challenge — mobile fitness prep app for 3 friends
    =========================================================== */
 
+/* ---------- FIREBASE DATA MODEL (multi-team, phase 2) ---------------------
+   All team-owned data lives under teams/{teamId}/... — each team's data is
+   fully isolated under its own node.
+
+   teams/{teamId}/
+     meta/
+       name         — display name of the team/challenge
+       destination  — freeform text shown as "До {destination}" on Home
+       tripDate     — ISO date string, this team's trip/goal date
+       status       — "active" (default/missing) | "completed" — flips to
+                       "completed" automatically once the trip date is in
+                       the past (see checkGoalClosure/closeActiveGoal)
+       closedAt     — ms timestamp of closure, cleared when a new goal starts
+       inviteCode   — short code other people use to join this team
+       createdAt    — ms timestamp this *cycle* started (reset when a new
+                       goal begins, not just when the team was first created)
+       migrated     — true once the one-time migration from the old flat
+                       root paths has run (see migrateLegacyDataIfNeeded) —
+                       brand-new teams are just created with this already true
+     members/{login}/
+       role         — "owner" | "member" — only "owner" can start a new goal
+       joinedAt     — ms timestamp
+     history/{cycleId}   — frozen snapshot written once per closed goal:
+       name, destination, tripDate, startedAt, closedAt,
+       summary/{login} — { name, totalSteps, totalWorkoutMinutes, points, bestStreak }
+                          at the moment the goal closed (all-time totals —
+                          activities themselves are never reset/archived)
+     activities/{login}/{entryId}   — unchanged shape from before
+     comments/{activityId}/{commentId}
+     reactions/{activityId}/{emoji}/{login}
+     profiles/{login}                — name/avatar/dailyGoal overrides
+
+   Global (not team-scoped) — added this phase for real registration:
+     users/{uid}/memberships/{teamId}: { login }
+       — which teams a Firebase Auth account belongs to (can be more than
+         one — see joinAnotherTeam/switchToTeam/leaveTeam), and what its
+         per-team "login" key is in each one. `login` only needs to be
+         unique *within* a team (see slugifyName/uniqueLoginForTeam), so
+         nothing about the existing per-team code needed to change.
+     users/{uid}/lastActiveTeamId: teamId
+       — which of (possibly several) memberships to open by default; kept
+         up to date by activateTeam every time a team is entered/switched to.
+     users/{uid}/completedGoals/{cycleId}
+       — this account's own permanent copy of every goal it's seen close,
+         regardless of which team it happened in or whether this account is
+         still a member of that team. Same shape as a teams/{teamId}/history
+         entry, plus teamId + myLogin. Populated by
+         archiveTeamHistoryToPersonalRecord (kept live while a member) and
+         leaveTeam (one last catch-up pass on the way out). "Завершённые
+         цели" in Profile renders from this, not from the active team's
+         history, so it doesn't change when switching teams.
+     inviteCodes/{code}: teamId
+       — short-code lookup used by the "join a team" screen.
+
+   `activeTeamId` is now a runtime variable (not a constant): it's set once
+   login resolves which team the signed-in person belongs to (see
+   resolveActiveTeam), or once they create/join/switch to one.
+   --------------------------------------------------------------------- */
+let activeTeamId = "turkey-2026"; // default until login resolves the real one
+function teamPath(subpath) { return `teams/${activeTeamId}/${subpath}`; }
+
 // ---------- CONFIG ----------
 const TRIP_DATE = new Date('2026-08-28T00:00:00');
+let activeTripDate = TRIP_DATE; // overwritten from teams/{activeTeamId}/meta/tripDate once known
 const DAILY_STEP_GOAL = 8000;
 // WHO guideline: 150 min/week of moderate activity, or 75 min/week of vigorous activity,
 // or an equivalent combination (vigorous minutes count double toward this target).
@@ -11,14 +73,15 @@ const WEEKLY_ACTIVITY_GOAL_MIN = 150;
 
 // Fallback copy of users.json in case fetch fails (e.g. opened via file://)
 // No passwords are stored anywhere — Firebase Authentication owns those.
-// Fixed, vivid colors for the "Команда" trend chart lines — kept separate from each
-// person's `color` field (used elsewhere for charts/avatars) so this chart specifically
-// reads as clear yellow / blue / orange in line with the app's theme.
-const TEAM_CHART_COLORS = {
-  tanya: "#FF9F40",  // orange
-  lilu: "#4EA8FF",   // blue
-  nastya: "#FFD54F", // yellow
-};
+// Vivid colors for the "Команда" trend chart lines — kept separate from each
+// person's `color` field (used elsewhere for avatars/etc.) so this chart reads
+// clearly. Assigned by *position* in the team roster (not by name), so it
+// works for any number/composition of members, not just the original three.
+const TEAM_CHART_PALETTE = ["#FF9F40", "#4EA8FF", "#FFD54F", "#B7E14D", "#FF6B9D", "#8B7FFF", "#4EE0C4", "#FF7A59"];
+function teamColorFor(login) {
+  const idx = USERS.findIndex((u) => u.login === login);
+  return TEAM_CHART_PALETTE[(idx >= 0 ? idx : 0) % TEAM_CHART_PALETTE.length];
+}
 
 const FALLBACK_USERS = [
   { login: "tanya",  email: "tanya@turkeytrip.app",  name: "Танюшка",     avatar: "face3", color: "#FF7A59", avatarGradient: "sunset" },
@@ -27,7 +90,7 @@ const FALLBACK_USERS = [
 ];
 
 // Avatar keys -> custom PNG sticker (stored in /avatars). Replaces the earlier emoji/SVG-icon avatars.
-const AVATAR_ICON_KEYS = ["face1", "face2", "face3", "face4", "face5", "face6", "face7", "face8"];
+const AVATAR_ICON_KEYS = ["face1", "face2", "face3", "face4", "face5", "face6", "face7", "face8", "face9", "face10", "face11", "face12"];
 function avatarSrc(key) {
   const safe = AVATAR_ICON_KEYS.includes(key) ? key : "face1";
   return `avatars/${safe}.png`;
@@ -50,37 +113,104 @@ function gradCss(key) {
 }
 
 const MOTIVATION_STEPS = [
-  "Ещё немного, и на пляже ты будешь порхать как бабочка! 🦋",
-  "Загранпаспорт готов, ноги — тоже! 💪",
-  "Турция уже слышит твои шаги 👣✈️",
-  "Каждый шаг — это на шаг ближе к морю 🌊",
-  "Ты сегодня буквально шла к отпуску!",
-  "Шагами к шезлонгу! 🏖️",
-  "Так держать — купальник уже нервничает 😄",
+  "Ещё немного — и сегодняшняя цель ваша! 💪",
+  "Каждый шаг приближает вас к результату 👣",
+  "Отличный темп, продолжайте! 🚶",
+  "Так держать — прогресс уже заметен 😄",
+  "Сегодня вы двигаетесь в правильную сторону",
+  "Хороший шаг вперёд! 🎯",
+  "Дисциплина в действии! 🔥",
   "Прогресс не купишь, зато можно нашагать!"
 ];
 
 const MOTIVATION_WORKOUT = [
-  "Тело говорит спасибо, отпуск говорит «жду тебя»! 🙌",
+  "Тело говорит спасибо за эту тренировку! 🙌",
   "Ещё одна тренировка — ещё одна причина гордиться собой 💥",
-  "Турецкий загар оценит эту тренировку по достоинству ☀️",
-  "Мышцы качаются, чемодан почти собран 🧳",
-  "Ты сильнее вчерашней себя!",
-  "Пляжный волейбол вот-вот скажет тебе спасибо 🏐",
-  "Отличная работа! Заслужила мороженое (по желанию 😉)"
+  "Отличная работа над собой ☀️",
+  "Каждая тренировка приближает к цели 🎯",
+  "Вы сильнее, чем вчера!",
+  "Дисциплина строит результат 🏋️",
+  "Отличная работа! Заслужили передышку (по желанию 😉)"
 ];
 
+// Gender-neutral (uses "вы") and not tied to any specific trip/destination —
+// the same phrases work for any team's goal, whatever it is.
 const MOTIVATION_DAILY = [
-  { emoji: "🍺", text: "Вы на один день ближе к холодному пиву в Турции" },
-  { emoji: "🍹", text: "Каждый шаг приближает вас к all inclusive" },
-  { emoji: "🏖️", text: "Турция уже готовит для вас лежак" },
-  { emoji: "🧳", text: "Ещё чуть-чуть — и чемодан можно закрывать" },
-  { emoji: "😎", text: "Загар ждёт, а вы уже в форме" },
-  { emoji: "💪", text: "Команда красавицы — отпуск заслужен на 100%" },
-  { emoji: "🌊", text: "До моря ближе, чем кажется" },
-  { emoji: "🍸", text: "Сегодняшняя тренировка — это завтрашний коктейль у бассейна" },
-  { emoji: "👣", text: "Вы буквально идёте к отпуску ногами" },
-  { emoji: "🌴", text: "Ещё немного — и будильники на паузе" }
+  { emoji: "🎯", text: "До цели на один день меньше" },
+  { emoji: "✅", text: "Каждый день челленджа имеет значение" },
+  { emoji: "💪", text: "Сегодня вы стали сильнее, чем вчера" },
+  { emoji: "🔥", text: "Лень сегодня проиграла" },
+  { emoji: "🔥", text: "Серия продолжается. Не останавливайтесь" },
+  { emoji: "✔️", text: "Еще одна галочка в копилку дисциплины" },
+  { emoji: "👣", text: "Каждый шаг приближает к результату" },
+  { emoji: "🙏", text: "Ваше будущее «спасибо себе» уже в пути" },
+  { emoji: "⏳", text: "Осталось совсем немного" },
+  { emoji: "🎯", text: "Цель становится ближе" },
+  { emoji: "👍", text: "Сегодня вы сделали правильный выбор" },
+  { emoji: "💯", text: "Еще один день без оправданий" },
+  { emoji: "🧠", text: "Организм начинает понимать, что происходит" },
+  { emoji: "📈", text: "Прогресс любит постоянство" },
+  { emoji: "🔁", text: "Главное — не скорость, а регулярность" },
+  { emoji: "💪", text: "Каждая тренировка окупится результатом" },
+  { emoji: "🏆", text: "Сегодня вы победили себя" },
+  { emoji: "📊", text: "Каждый день складывается в результат" },
+  { emoji: "🌅", text: "Ещё один день позади — и это плюс" },
+  { emoji: "⚡", text: "Сегодня — плюс к энергии" },
+  { emoji: "🌤️", text: "Завтра будет легче" },
+  { emoji: "✨", text: "Каждое усилие имеет смысл" },
+  { emoji: "🌱", text: "Все начинается с одного дня" },
+  { emoji: "🔁", text: "И продолжается следующим" },
+  { emoji: "🎯", text: "Вы уже в игре" },
+  { emoji: "⛓️", text: "Не разрывайте серию" },
+  { emoji: "🔒", text: "Ваш прогресс невозможно отменить" },
+  { emoji: "🧭", text: "Дисциплина работает лучше мотивации" },
+  { emoji: "🌟", text: "Сегодня отличный день стать лучше" },
+  { emoji: "🙌", text: "Вы уже сделали больше, чем многие" },
+  { emoji: "👏", text: "Продолжайте в том же духе" },
+  { emoji: "⏰", text: "Ещё один день — ещё один шаг к цели" },
+  { emoji: "🗺️", text: "Еще один день пройден" },
+  { emoji: "💫", text: "Сегодняшние усилия станут завтрашней уверенностью" },
+  { emoji: "🎯", text: "Каждая отметка приближает цель" },
+  { emoji: "🏃", text: "Сегодня вы выбрали движение" },
+  { emoji: "🏆", text: "И это уже победа" },
+  { emoji: "🏅", text: "Каждый день — маленькая победа" },
+  { emoji: "💪", text: "Ваше тело замечает каждую тренировку" },
+  { emoji: "⏳", text: "Результат любит терпеливых" },
+  { emoji: "💎", text: "Сегодня вы инвестировали в себя" },
+  { emoji: "😊", text: "Завтра вы будете рады, что не пропустили" },
+  { emoji: "👣", text: "Маленькие шаги приводят далеко" },
+  { emoji: "✨", text: "Серия становится все красивее" },
+  { emoji: "👏", text: "Отличная работа!" },
+  { emoji: "🙌", text: "Вы молодцы" },
+  { emoji: "🏁", text: "Не сдавайтесь за шаг до цели" },
+  { emoji: "✅", text: "Сегодня было не зря" },
+  { emoji: "🧭", text: "Продолжайте — вы на верном пути" },
+  { emoji: "😌", text: "Еще одна причина собой гордиться" },
+  { emoji: "🔗", text: "Каждый день укрепляет привычку" },
+  { emoji: "🌟", text: "Это уже становится образом жизни" },
+  { emoji: "⏳", text: "Осталось меньше, чем кажется" },
+  { emoji: "▶️", text: "Не останавливайтесь сейчас" },
+  { emoji: "💛", text: "Сегодня вы выбрали себя" },
+  { emoji: "👍", text: "И это правильный выбор" },
+  { emoji: "💪", text: "Каждая тренировка имеет значение" },
+  { emoji: "➕", text: "Еще один день — еще один плюс" },
+  { emoji: "👏", text: "Так держать!" },
+  { emoji: "🏃", text: "Отличный темп" },
+  { emoji: "💪", text: "Вы справляетесь" },
+  { emoji: "▶️", text: "Главное — не останавливаться" },
+  { emoji: "🙌", text: "Все получится" },
+  { emoji: "👣", text: "Сегодня вы сделали шаг вперед" },
+  { emoji: "➡️", text: "Даже маленький шаг — это движение" },
+  { emoji: "🔥", text: "Серия впечатляет" },
+  { emoji: "💪", text: "Каждый день делает вас сильнее" },
+  { emoji: "⏳", text: "Осталось совсем чуть-чуть" },
+  { emoji: "🏆", text: "Сегодня — еще одна победа" },
+  { emoji: "🔁", text: "Завтра продолжим" },
+  { emoji: "🎯", text: "Вы ближе к цели, чем вчера" },
+  { emoji: "🌿", text: "Хороший день для хороших привычек" },
+  { emoji: "🏅", text: "Продолжайте собирать победы" },
+  { emoji: "✨", text: "Ваша лучшая версия уже совсем рядом" },
+  { emoji: "🎉", text: "До завершения цели все ближе!" }
 ];
 
 const ACHIEVEMENTS = [
@@ -105,6 +235,14 @@ const ACHIEVEMENTS = [
 // ---------- STATE ----------
 let USERS = [];
 let currentUser = null;
+let pendingAuth = null; // { uid, email, displayName } while waiting on the create/join-team screen
+let authMode = "login"; // "login" | "register" — which tab is active on the login screen
+let tripModalMode = "edit"; // "edit" | "new" — which flow opened editTripModal (see wireEvents)
+let teamGateMode = "login"; // "login" | "addTeam" — whether #teamGateBackBtn should log out or just return to the app
+let activeTeamMeta = {}; // { name, destination, tripDate, status, inviteCode, ... } for the active team
+let teamHistory = {}; // cycleId -> frozen summary of a closed goal, for the CURRENTLY ACTIVE team only
+let personalGoals = {}; // cycleId -> same shape, but this account's own copy across every team it's ever been in (see archiveTeamHistoryToPersonalRecord) — this is what "Завершённые цели" in Profile actually renders from, so it survives leaving/switching teams
+let closingGoal = false; // guards against double-writing a history entry from the same client
 let activities = {}; // login -> { entryId: {id, date, type, steps?, workoutType?, workoutMinutes?, points, ts} }
 let comments = {}; // activityId -> { commentId: {login, name, text, ts} }
 let reactions = {}; // activityId -> { emoji: { login: true } }
@@ -152,7 +290,7 @@ function dayLabel(dateStr) {
 }
 function computeDaysLeft() {
   const today = startOfDay(new Date());
-  const trip = startOfDay(TRIP_DATE);
+  const trip = startOfDay(activeTripDate);
   return Math.ceil((trip - today) / 86400000);
 }
 function pointsForSteps(steps) { return Math.round(steps / 100); }
@@ -236,9 +374,196 @@ async function loadUsersData() {
   }
 }
 
+// One-time migration: moves data that was previously stored at the old flat
+// root paths (activities/, comments/, reactions/, profiles/) into
+// teams/turkey-2026/... (the original team), and makes sure its meta/
+// members nodes exist. Safe to call for any team — it checks meta/migrated
+// first and does nothing once that's set (brand-new teams are created with
+// it already true). Runs before the live listeners in subscribeToActiveTeam()
+// attach, so nobody reads a half-migrated team node.
+async function migrateLegacyDataIfNeeded() {
+  const migratedSnap = await db.ref(teamPath("meta/migrated")).once("value");
+  if (migratedSnap.val()) return;
+
+  const [actSnap, comSnap, reactSnap, profSnap] = await Promise.all([
+    db.ref("activities").once("value"),
+    db.ref("comments").once("value"),
+    db.ref("reactions").once("value"),
+    db.ref("profiles").once("value")
+  ]);
+
+  const updates = {};
+  if (actSnap.exists()) updates[teamPath("activities")] = actSnap.val();
+  if (comSnap.exists()) updates[teamPath("comments")] = comSnap.val();
+  if (reactSnap.exists()) updates[teamPath("reactions")] = reactSnap.val();
+  if (profSnap.exists()) updates[teamPath("profiles")] = profSnap.val();
+
+  const inviteCode = randomCode(6);
+  updates[teamPath("meta/name")] = "Turkey Challenge";
+  updates[teamPath("meta/destination")] = "Турции";
+  updates[teamPath("meta/tripDate")] = TRIP_DATE.toISOString();
+  updates[teamPath("meta/status")] = "active";
+  updates[teamPath("meta/inviteCode")] = inviteCode;
+  updates[teamPath("meta/createdAt")] = Date.now();
+  updates[teamPath("meta/migrated")] = true;
+  updates[`inviteCodes/${inviteCode}`] = "turkey-2026";
+  // lilu is the designated team owner (only she can edit the trip/start a new
+  // goal); the other original members carry over as regular team members.
+  USERS.forEach((u) => {
+    updates[teamPath(`members/${u.login}`)] = { role: u.login === "lilu" ? "owner" : "member", joinedAt: Date.now() };
+  });
+
+  await db.ref().update(updates);
+}
+
+// ---------- TEAMS: create / join / resolve ----------
+function randomCode(len) {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O/1/I — avoids mix-ups when typed by hand
+  let out = "";
+  for (let i = 0; i < len; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
+}
+
+const CYRILLIC_TO_LATIN = {
+  а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "e", ж: "zh", з: "z", и: "i",
+  й: "y", к: "k", л: "l", м: "m", н: "n", о: "o", п: "p", р: "r", с: "s", т: "t",
+  у: "u", ф: "f", х: "h", ц: "ts", ч: "ch", ш: "sh", щ: "sch", ъ: "", ы: "y", ь: "",
+  э: "e", ю: "yu", я: "ya"
+};
+// Turns a chosen display name into a short, key-safe "login" — this only
+// needs to be unique *within one team* (that's the only scope it's used at:
+// teams/{teamId}/members/{login}, .../activities/{login}/...), so a simple
+// transliterated slug plus a numeric suffix on collision is enough.
+function slugifyName(name) {
+  const lower = String(name || "").trim().toLowerCase();
+  const translit = lower.split("").map((ch) => (ch in CYRILLIC_TO_LATIN ? CYRILLIC_TO_LATIN[ch] : ch)).join("");
+  const slug = translit.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return slug || "friend";
+}
+async function uniqueLoginForTeam(teamId, name) {
+  const base = slugifyName(name);
+  const snap = await db.ref(`teams/${teamId}/members`).once("value");
+  const existing = snap.val() || {};
+  if (!existing[base]) return base;
+  let i = 2;
+  while (existing[`${base}-${i}`]) i += 1;
+  return `${base}-${i}`;
+}
+
+// Creates a brand-new team, makes uid its first member/owner, and returns
+// { teamId, login }. tripDateStr is a plain "YYYY-MM-DD" from a date input.
+async function createTeam(uid, teamName, tripDateStr, displayName, destination) {
+  const teamId = `${slugifyName(teamName)}-${randomCode(4).toLowerCase()}`;
+  const login = await uniqueLoginForTeam(teamId, displayName);
+  const inviteCode = randomCode(6);
+  const updates = {};
+  updates[`teams/${teamId}/meta`] = {
+    name: teamName,
+    destination: destination || "цели",
+    tripDate: tripDateStr,
+    status: "active",
+    inviteCode,
+    createdAt: Date.now(),
+    migrated: true // brand-new team — nothing legacy to migrate
+  };
+  updates[`teams/${teamId}/members/${login}`] = { role: "owner", joinedAt: Date.now() };
+  updates[`teams/${teamId}/profiles/${login}`] = { name: displayName };
+  updates[`inviteCodes/${inviteCode}`] = teamId;
+  updates[`users/${uid}/memberships/${teamId}`] = { login };
+  await db.ref().update(updates);
+  return { teamId, login };
+}
+
+// Joins an existing team via its invite code. Returns { teamId, login }, or
+// { error } if the code doesn't resolve to a team.
+async function joinTeamByCode(uid, codeRaw, displayName) {
+  const code = codeRaw.trim().toUpperCase();
+  const teamIdSnap = await db.ref(`inviteCodes/${code}`).once("value");
+  const teamId = teamIdSnap.val();
+  if (!teamId) return { error: "Такой код не найден. Проверьте и попробуйте ещё раз." };
+  const login = await uniqueLoginForTeam(teamId, displayName);
+  const updates = {};
+  updates[`teams/${teamId}/members/${login}`] = { role: "member", joinedAt: Date.now() };
+  updates[`teams/${teamId}/profiles/${login}`] = { name: displayName };
+  updates[`users/${uid}/memberships/${teamId}`] = { login };
+  await db.ref().update(updates);
+  return { teamId, login };
+}
+
+// If this Firebase Auth email matches one of the original 3 friends the app
+// launched with, link this uid to the legacy team automatically — no
+// signup/create-team flow needed for the people it already worked for.
+// Runs the phase-1 migration first (it's a no-op once already done) so this
+// works correctly even on the very first login after deploying this update,
+// before teams/turkey-2026/members has ever been populated.
+async function linkLegacyAccountIfMatches(uid, email) {
+  const legacy = FALLBACK_USERS.find((u) => u.email && u.email.toLowerCase() === String(email || "").toLowerCase());
+  if (!legacy) return null;
+  const teamId = "turkey-2026";
+  const savedActiveTeamId = activeTeamId;
+  activeTeamId = teamId; // teamPath() inside the migration must resolve to the legacy team
+  await migrateLegacyDataIfNeeded();
+  activeTeamId = savedActiveTeamId;
+  const memberSnap = await db.ref(`teams/${teamId}/members/${legacy.login}`).once("value");
+  if (!memberSnap.exists()) return null;
+  await db.ref(`users/${uid}/memberships/${teamId}`).set({ login: legacy.login });
+  return { teamId, login: legacy.login };
+}
+
+// Figures out which team a signed-in uid should land in. A person can now
+// belong to more than one team (see joinAnotherTeam flow) — which one comes
+// up is whichever teamId is saved at users/{uid}/lastActiveTeamId (kept in
+// sync by activateTeam every time a team is entered/switched to). Falls back
+// to "first membership found" if that field is missing or points at a team
+// they're no longer in. Returns null if they have no team yet at all (brand
+// new person who hasn't created or joined one).
+async function resolveActiveTeam(uid, email) {
+  const snap = await db.ref(`users/${uid}/memberships`).once("value");
+  let memberships = snap.val() || {};
+  if (Object.keys(memberships).length === 0) {
+    const linked = await linkLegacyAccountIfMatches(uid, email);
+    if (linked) memberships = { [linked.teamId]: { login: linked.login } };
+  }
+  const teamIds = Object.keys(memberships);
+  if (teamIds.length === 0) return null;
+  const lastSnap = await db.ref(`users/${uid}/lastActiveTeamId`).once("value");
+  const last = lastSnap.val();
+  const teamId = (last && memberships[last]) ? last : teamIds[0];
+  return { teamId, login: memberships[teamId].login };
+}
+
+// Loads the member roster for a team into USERS. The original 3 keep their
+// existing cosmetics (color/avatar/gradient defaults) from FALLBACK_USERS;
+// brand-new members get sensible defaults, editable any time in Профиль.
+// Real per-team display names come from profiles/{login}.name via the
+// existing applyProfileOverrides(), same as before.
+async function loadTeamMembers(teamId) {
+  const snap = await db.ref(`teams/${teamId}/members`).once("value");
+  const members = snap.val() || {};
+  const logins = Object.keys(members);
+  USERS = logins.map((login, i) => {
+    const role = (members[login] && members[login].role) || "member";
+    const legacy = FALLBACK_USERS.find((u) => u.login === login);
+    if (legacy) return { ...legacy, role };
+    return {
+      login,
+      email: null,
+      name: login,
+      avatar: "face1",
+      color: TEAM_CHART_PALETTE[i % TEAM_CHART_PALETTE.length],
+      avatarGradient: DEFAULT_AVATAR_GRADIENT,
+      role
+    };
+  });
+}
+
 // Cloud (Firebase) sync with automatic fallback to local-only storage
 // if firebase-config.js hasn't been filled in yet.
-function initStorage() {
+// Sets up the Firebase app connection itself — no team-specific reads here,
+// since which team to read isn't known until login resolves it (see
+// enterTeam/activateTeam). In local (non-cloud) demo mode there's only ever
+// the one legacy team, so it's safe to load that right away.
+function initFirebaseApp() {
   try {
     if (
       typeof firebaseConfig !== "undefined" &&
@@ -256,30 +581,65 @@ function initStorage() {
     useCloud = false;
   }
 
-  applyProfileOverrides(); // make sure every user has a dailyGoal right away
-
-  if (useCloud) {
-    db.ref("activities").on("value", (snap) => {
-      activities = snap.val() || {};
-      ensureUserBuckets();
-      rerenderCurrentTab();
-    });
-    db.ref("comments").on("value", (snap) => {
-      comments = snap.val() || {};
-      rerenderCurrentTab();
-    });
-    db.ref("reactions").on("value", (snap) => {
-      reactions = snap.val() || {};
-      rerenderCurrentTab();
-    });
-    db.ref("profiles").on("value", (snap) => {
-      profiles = snap.val() || {};
-      applyProfileOverrides();
-      rerenderCurrentTab();
-    });
-  } else {
+  if (!useCloud) {
+    applyProfileOverrides(); // make sure every user has a dailyGoal right away
     loadLocalFallback();
   }
+}
+
+// Attaches the live listeners for the now-known activeTeamId, and pulls in
+// that team's trip date. Called once per login/team-switch — see
+// activateTeam — never at boot.
+async function subscribeToActiveTeam() {
+  await migrateLegacyDataIfNeeded(); // no-op for any team except the original one
+  applyProfileOverrides();
+
+  db.ref(teamPath("activities")).on("value", (snap) => {
+    activities = snap.val() || {};
+    ensureUserBuckets();
+    rerenderCurrentTab();
+  });
+  db.ref(teamPath("comments")).on("value", (snap) => {
+    comments = snap.val() || {};
+    rerenderCurrentTab();
+  });
+  db.ref(teamPath("reactions")).on("value", (snap) => {
+    reactions = snap.val() || {};
+    rerenderCurrentTab();
+  });
+  db.ref(teamPath("profiles")).on("value", (snap) => {
+    profiles = snap.val() || {};
+    applyProfileOverrides();
+    rerenderCurrentTab();
+  });
+  // Keeps USERS live as people join/leave the team — without this, a
+  // teammate who joins later wouldn't show up for anyone already in the app
+  // until they reloaded.
+  db.ref(teamPath("members")).on("value", () => {
+    loadTeamMembers(activeTeamId).then(() => {
+      applyProfileOverrides();
+      if (currentUser) currentUser = USERS.find((u) => u.login === currentUser.login) || currentUser;
+      rerenderCurrentTab();
+    });
+  });
+
+  db.ref(teamPath("history")).on("value", (snap) => {
+    teamHistory = snap.val() || {};
+    archiveTeamHistoryToPersonalRecord();
+    rerenderCurrentTab();
+  });
+
+  const metaSnap = await db.ref(teamPath("meta")).once("value");
+  activeTeamMeta = metaSnap.val() || {};
+  activeTripDate = activeTeamMeta.tripDate ? new Date(activeTeamMeta.tripDate) : TRIP_DATE;
+  checkGoalClosure();
+
+  db.ref(teamPath("meta")).on("value", (snap) => {
+    activeTeamMeta = snap.val() || {};
+    activeTripDate = activeTeamMeta.tripDate ? new Date(activeTeamMeta.tripDate) : TRIP_DATE;
+    checkGoalClosure();
+    rerenderCurrentTab();
+  });
 }
 
 function ensureUserBuckets() {
@@ -311,6 +671,8 @@ function loadLocalFallback() {
   try { comments = JSON.parse(localStorage.getItem("tc_comments") || "{}"); } catch (e) { comments = {}; }
   try { reactions = JSON.parse(localStorage.getItem("tc_reactions") || "{}"); } catch (e) { reactions = {}; }
   try { profiles = JSON.parse(localStorage.getItem("tc_profiles") || "{}"); } catch (e) { profiles = {}; }
+  try { activeTeamMeta = JSON.parse(localStorage.getItem("tc_teamMeta") || "{}"); } catch (e) { activeTeamMeta = {}; }
+  if (activeTeamMeta.tripDate) activeTripDate = new Date(activeTeamMeta.tripDate);
   ensureUserBuckets();
   applyProfileOverrides();
 }
@@ -322,13 +684,25 @@ function persistLocal() {
   localStorage.setItem("tc_comments", JSON.stringify(comments));
   localStorage.setItem("tc_reactions", JSON.stringify(reactions));
   localStorage.setItem("tc_profiles", JSON.stringify(profiles));
+  localStorage.setItem("tc_teamMeta", JSON.stringify(activeTeamMeta));
 }
 
 function saveProfile(login, patch) {
   if (!profiles[login]) profiles[login] = {};
   Object.assign(profiles[login], patch);
   applyProfileOverrides();
-  if (useCloud) db.ref(`profiles/${login}`).update(patch);
+  if (useCloud) db.ref(teamPath(`profiles/${login}`)).update(patch);
+  else persistLocal();
+}
+
+// Lets any team member fix a typo'd trip name/date after team creation.
+// Updates the in-memory meta immediately for instant UI feedback; in cloud
+// mode the live meta listener (see subscribeToActiveTeam) will also receive
+// the same values shortly after and re-render, which is harmless/idempotent.
+function saveTripMeta(patch) {
+  Object.assign(activeTeamMeta, patch);
+  if (patch.tripDate) activeTripDate = new Date(patch.tripDate);
+  if (useCloud) db.ref(teamPath("meta")).update(patch);
   else persistLocal();
 }
 
@@ -474,16 +848,96 @@ function computeAchievements(login) {
   return ACHIEVEMENTS.map((a) => ({ ...a, unlocked: a.check(ctx) }));
 }
 
+// ---------- GOAL LIFECYCLE (close current goal → history → start new one) ----------
+
+// All-time per-member snapshot frozen into history when a goal closes.
+// Deliberately not scoped to "just this cycle" — activities are never
+// reset/tagged per-cycle (that would risk losing data and would break the
+// lifetime achievements like "100K клуб"), so this is simply "where everyone
+// stood at the moment this goal wrapped up".
+function computeGoalSummary() {
+  const summary = {};
+  USERS.forEach((u) => {
+    const totals = computeTotals(u.login);
+    const streak = computeStreak(u.login);
+    summary[u.login] = {
+      name: u.name,
+      totalSteps: totals.totalSteps,
+      totalWorkoutMinutes: totals.totalWorkoutMinutes,
+      points: totals.points,
+      bestStreak: streak.best
+    };
+  });
+  return summary;
+}
+
+// Called after every meta load/update — cheap no-op unless the trip date has
+// actually passed and nobody's closed it yet. There's no server/cron here,
+// so this only fires when someone has the app open on/after the date; that's
+// an accepted limitation of a client-only Firebase app.
+function checkGoalClosure() {
+  if (!useCloud || !activeTeamMeta) return;
+  if (activeTeamMeta.status === "completed") return;
+  if (!activeTeamMeta.tripDate) return;
+  if (computeDaysLeft() < 0) closeActiveGoal();
+}
+
+// Freezes a summary into teams/{teamId}/history and flips meta to
+// "completed". Two people can easily have the app open at the same moment
+// right after the trip date — a plain read-then-write here would race and
+// both could push a duplicate history entry. Using a transaction on
+// meta/status makes the "who gets to close it" decision atomic: Firebase
+// retries the updater against the latest server value, so only the client
+// that actually flips status from non-"completed" to "completed" gets
+// result.committed === true and goes on to write the history entry; every
+// other simultaneous caller sees the already-"completed" value, aborts
+// (returns undefined) and does nothing further.
+async function closeActiveGoal() {
+  if (closingGoal) return;
+  closingGoal = true;
+  try {
+    const closedAt = Date.now();
+    const result = await db.ref(teamPath("meta/status")).transaction((current) => {
+      if (current === "completed") return; // abort — already closed, don't touch it
+      return "completed";
+    });
+    if (!result.committed) return; // someone else won the race to close this goal
+    const historyEntry = {
+      name: activeTeamMeta.name || "",
+      destination: activeTeamMeta.destination || "",
+      tripDate: activeTeamMeta.tripDate || "",
+      startedAt: activeTeamMeta.createdAt || null,
+      closedAt,
+      summary: computeGoalSummary()
+    };
+    await db.ref(teamPath("history")).push().set(historyEntry);
+    await db.ref(teamPath("meta/closedAt")).set(closedAt);
+  } finally {
+    closingGoal = false;
+  }
+}
+
+// Only team owners can edit the active trip or start a new goal (per-team
+// role, not global). Starting a new goal reuses the same meta node as the
+// original team — roster, invite code and the activity feed all carry over
+// untouched; only the name/destination/date cycle resets and status flips
+// back to "active" (closedAt cleared).
+function isTeamOwner() {
+  return !!currentUser && currentUser.role === "owner";
+}
+
 // ---------- AUTH ----------
 // No passwords are ever stored in a file. When Firebase is configured, real
 // authentication happens through Firebase Authentication: the first time
-// someone logs in with a given name, that password is registered for her
+// someone signs in with a given email, that password is registered for them
 // (Firebase hashes and stores it securely); every login after that verifies
-// against Firebase, never against anything we control.
+// against Firebase, never against anything we control. Which name goes with
+// that account, and which team(s) they're in, is separate — see
+// resolveActiveTeam/createTeam/joinTeamByCode.
 function firebaseAuthErrorText(err) {
   const map = {
     "auth/weak-password": "Пароль должен быть не короче 6 символов.",
-    "auth/invalid-email": "Некорректный логин.",
+    "auth/invalid-email": "Некорректный email.",
     "auth/too-many-requests": "Слишком много попыток входа, попробуйте чуть позже.",
     "auth/network-request-failed": "Нет соединения с сервером.",
     "auth/user-disabled": "Этот аккаунт отключён."
@@ -491,39 +945,49 @@ function firebaseAuthErrorText(err) {
   return (err && map[err.code]) || "Не удалось войти. Попробуйте ещё раз.";
 }
 
-async function attemptLogin(loginRaw, password) {
-  const clean = loginRaw.trim().toLowerCase();
-  const user = USERS.find((u) => u.login.toLowerCase() === clean);
-  if (!user) return { ok: false, error: "Такой участницы нет в списке." };
+// Local (non-cloud) demo mode never had real accounts — it's a fallback for
+// trying the app before Firebase is configured, so it still only supports
+// the 3 names the app launched with, matched by email prefix, on one device.
+//
+// mode is "login" or "register" — set explicitly by the Войти/Регистрация
+// toggle on the login screen, rather than guessed by trying one then falling
+// back to the other. That fallback used to mean a mistyped email on the
+// "Войти" button would silently create a brand-new account instead of
+// showing an error — this way "Войти" only ever signs in, and "Регистрация"
+// only ever creates a new account.
+async function attemptLogin(emailRaw, password, mode) {
+  const email = emailRaw.trim().toLowerCase();
 
   if (!useCloud) {
-    // Local demo mode (Firebase not configured yet) — no password is stored
-    // anywhere, so anyone can sign in as any known name on this one device.
+    const login = email.split("@")[0];
+    const user = USERS.find((u) => u.login.toLowerCase() === login);
+    if (!user) return { ok: false, error: "В демо-режиме без Firebase доступны только исходные участницы (tanya/lilu/nastya@turkeytrip.app)." };
     currentUser = user;
-    return { ok: true };
+    return { ok: true, isNew: false };
   }
 
-  const email = user.email || `${user.login}@turkeytrip.app`;
-
   try {
-    try {
-      await firebase.auth().signInWithEmailAndPassword(email, password);
-      currentUser = user;
-      return { ok: true };
-    } catch (signInErr) {
-      // Not registered yet (or signIn failed for another reason) — try to
-      // register. If registration says the email is already in use, the
-      // account exists and the original failure really was a wrong password.
+    if (mode === "register") {
       try {
-        await firebase.auth().createUserWithEmailAndPassword(email, password);
-        currentUser = user;
-        return { ok: true };
+        const cred = await firebase.auth().createUserWithEmailAndPassword(email, password);
+        return { ok: true, uid: cred.user.uid, email: cred.user.email, isNew: true };
       } catch (signUpErr) {
         if (signUpErr.code === "auth/email-already-in-use") {
-          return { ok: false, error: "Неверный пароль." };
+          return { ok: false, error: "Такой email уже зарегистрирован — переключитесь на «Войти»." };
         }
         return { ok: false, error: firebaseAuthErrorText(signUpErr) };
       }
+    }
+
+    try {
+      const cred = await firebase.auth().signInWithEmailAndPassword(email, password);
+      return { ok: true, uid: cred.user.uid, email: cred.user.email, isNew: false };
+    } catch (signInErr) {
+      const notRegistered = ["auth/user-not-found", "auth/invalid-credential", "auth/wrong-password"].includes(signInErr.code);
+      if (notRegistered) {
+        return { ok: false, error: "Не нашли аккаунт с таким email и паролем. Если вы ещё не регистрировались — переключитесь на «Регистрация»." };
+      }
+      return { ok: false, error: firebaseAuthErrorText(signInErr) };
     }
   } catch (fatalErr) {
     // firebase.auth() itself threw (e.g. SDK blocked/failed to load) — never
@@ -533,11 +997,217 @@ async function attemptLogin(loginRaw, password) {
   }
 }
 
+// Detaches the live listeners for whichever team was previously active —
+// needed now that different logins on the same page can mean different
+// teams, so a stale listener from a previous session can't leak data across.
+function detachTeamListeners() {
+  if (!useCloud || !db) return;
+  ["activities", "comments", "reactions", "profiles", "meta", "members", "history"].forEach((node) => {
+    db.ref(teamPath(node)).off();
+  });
+}
+
+function showTeamGate() {
+  $("#loginScreen").hidden = true;
+  $("#appScreen").hidden = true;
+  $("#teamGateScreen").hidden = false;
+}
+
+// users/{uid}/completedGoals is NOT team-scoped — attached once per login
+// session (from enterTeam), not per team, so it keeps working across
+// switchToTeam() calls and survives leaving the team a goal was closed in.
+function subscribeToPersonalGoals(uid) {
+  if (!useCloud || !db) return;
+  db.ref(`users/${uid}/completedGoals`).on("value", (snap) => {
+    const raw = snap.val() || {};
+    // Self-heals an earlier bug where joining a team whose goal was already
+    // closed could archive *every* one of that team's past goals to the new
+    // member too — including ones from before they'd even joined, which
+    // they never appear in the frozen summary for. Quietly deletes any
+    // personal record that doesn't actually include this account's own
+    // login in its summary, right as it loads, so nothing wrong stays
+    // visible even for entries written before this fix existed.
+    Object.entries(raw).forEach(([cycleId, h]) => {
+      if (!h.summary || !h.myLogin || !h.summary[h.myLogin]) {
+        delete raw[cycleId];
+        db.ref(`users/${uid}/completedGoals/${cycleId}`).set(null);
+      }
+    });
+    personalGoals = raw;
+    rerenderCurrentTab();
+  });
+}
+function unsubscribePersonalGoals(uid) {
+  if (!useCloud || !db || !uid) return;
+  db.ref(`users/${uid}/completedGoals`).off();
+}
+
+// Copies any of the active team's closed goals this account doesn't
+// already have a personal copy of into users/{uid}/completedGoals. Runs
+// every time teamHistory changes (including the very first time it's
+// fetched after entering a team), so a person only needs to have opened
+// the app at least once while still a member for it to end up in their own
+// permanent record — see leaveTeam() for the one extra safety pass right
+// before someone actually leaves.
+function archiveTeamHistoryToPersonalRecord() {
+  if (!useCloud || !firebase.auth().currentUser || !currentUser) return;
+  const uid = firebase.auth().currentUser.uid;
+  Object.entries(teamHistory || {}).forEach(([cycleId, h]) => {
+    if (personalGoals[cycleId]) return;
+    // Only claim a closed goal as "mine" if I actually appear in its frozen
+    // summary — someone who joins the team *after* a goal already closed
+    // (or was still on the team-gate screen at the time) wasn't part of
+    // that run and shouldn't see it in their own "Завершённые цели".
+    if (!h.summary || !h.summary[currentUser.login]) return;
+    db.ref(`users/${uid}/completedGoals/${cycleId}`).set({ ...h, teamId: activeTeamId, myLogin: currentUser.login });
+  });
+}
+
+// Runs right after a successful Firebase sign-in: figures out which team
+// this uid belongs to and boots straight into the app — or, for a brand-new
+// person with no team yet, shows the create/join screen instead.
+async function enterTeam(uid, email, displayName) {
+  pendingAuth = { uid, email, displayName };
+  teamGateMode = "login";
+  subscribeToPersonalGoals(uid); // once per login session, not per team — see the function comment
+  const resolved = await resolveActiveTeam(uid, email);
+  if (!resolved) {
+    showTeamGate();
+    return;
+  }
+  await activateTeam(resolved.teamId, resolved.login);
+}
+
+// Switches the app into a specific team once teamId + this person's
+// per-team login are known (from resolveActiveTeam, createTeam,
+// joinTeamByCode, or the team switcher). Used both at login time and
+// mid-session (switching teams / just joined an additional one) — so it
+// doesn't assume pendingAuth is set, and records lastActiveTeamId off the
+// live Firebase Auth session so the *next* login (or app reload) comes back
+// to whichever team was active most recently, not just the first one found.
+async function activateTeam(teamId, login) {
+  detachTeamListeners(); // in case a previous team's listeners were still attached
+  activeTeamId = teamId;
+  await loadTeamMembers(teamId);
+  currentUser = USERS.find((u) => u.login === login) || null;
+  if (!currentUser) {
+    if (pendingAuth) {
+      $("#loginError").textContent = "Не удалось загрузить команду. Попробуйте войти ещё раз.";
+      $("#loginError").hidden = false;
+    } else {
+      showToast("⚠️", "Не удалось загрузить команду.");
+    }
+    return;
+  }
+  if (useCloud && firebase.auth().currentUser) {
+    db.ref(`users/${firebase.auth().currentUser.uid}/lastActiveTeamId`).set(teamId);
+  }
+  await subscribeToActiveTeam();
+  pendingAuth = null;
+  showApp();
+}
+
+// Jumps to a team the account already belongs to (team switcher). Looks up
+// this account's per-team login from the memberships reverse-index, then
+// reuses activateTeam exactly like login does.
+async function switchToTeam(teamId) {
+  if (!useCloud || !firebase.auth().currentUser) return;
+  const uid = firebase.auth().currentUser.uid;
+  const snap = await db.ref(`users/${uid}/memberships/${teamId}`).once("value");
+  const membership = snap.val();
+  if (!membership) return;
+  await activateTeam(teamId, membership.login);
+  switchTab("home");
+}
+
+// Formally leaves a team: removes this account's entry from that team's
+// roster and from its own memberships reverse-index. Deliberately leaves
+// activities/{login}/... and profiles/{login} untouched — same
+// never-delete-activity principle as closeActiveGoal — so nothing is lost,
+// it just stops counting toward that team's live roster/totals going
+// forward. If the leaver was the owner, ownership passes to whoever's been
+// in the team the longest afterwards (by joinedAt); if they were the only
+// member, the team is simply left without one (no auto-owner to hand off
+// to — a known edge case for a team that's been fully abandoned).
+async function leaveTeam(teamId) {
+  if (!useCloud || !firebase.auth().currentUser) return;
+  const uid = firebase.auth().currentUser.uid;
+  const membershipSnap = await db.ref(`users/${uid}/memberships/${teamId}`).once("value");
+  const membership = membershipSnap.val();
+  if (!membership) return;
+  const login = membership.login;
+  const isActiveTeam = teamId === activeTeamId;
+
+  const membersSnap = await db.ref(`teams/${teamId}/members`).once("value");
+  const members = membersSnap.val() || {};
+  const wasOwner = members[login] && members[login].role === "owner";
+  const others = Object.entries(members).filter(([l]) => l !== login);
+  if (wasOwner && others.length) {
+    others.sort((a, b) => (a[1].joinedAt || 0) - (b[1].joinedAt || 0));
+    await db.ref(`teams/${teamId}/members/${others[0][0]}/role`).set("owner");
+  }
+
+  // One last safety pass: make sure every one of this team's closed goals
+  // has been copied into this account's own personal record. Normally
+  // archiveTeamHistoryToPersonalRecord already keeps that up to date live,
+  // but if this device never happened to have that team's history listener
+  // attached, this is the last guaranteed moment to grab it before the team
+  // either gets deleted outright (see below) or simply becomes unreadable
+  // to this account once membership is gone.
+  const historySnap = await db.ref(`teams/${teamId}/history`).once("value");
+  const history = historySnap.val() || {};
+  await Promise.all(Object.entries(history).map(([cycleId, h]) => {
+    if (personalGoals[cycleId]) return null;
+    if (!h.summary || !h.summary[login]) return null; // wasn't part of this particular closed goal
+    return db.ref(`users/${uid}/completedGoals/${cycleId}`).set({ ...h, teamId, myLogin: login });
+  }));
+
+  if (isActiveTeam) detachTeamListeners(); // stop reacting to a team we're about to remove ourselves from (or delete)
+
+  // teams/{teamId}/... writes happen while the membership index still
+  // exists — required by the stricter security rule (see README) — so the
+  // users/{uid}/memberships/{teamId} removal always comes last.
+  await db.ref(`teams/${teamId}/members/${login}`).set(null);
+
+  if (others.length === 0) {
+    // Last person out — the team is now a dead, ownerless shell (its
+    // history is already safely archived into everyone's personal record
+    // above). Delete it entirely, including its invite code, so it doesn't
+    // linger forever or leave a code that silently points at nothing.
+    const inviteCode = isActiveTeam
+      ? activeTeamMeta.inviteCode
+      : (await db.ref(`teams/${teamId}/meta/inviteCode`).once("value")).val();
+    await db.ref(`teams/${teamId}`).set(null);
+    if (inviteCode) await db.ref(`inviteCodes/${inviteCode}`).set(null);
+  }
+
+  await db.ref(`users/${uid}/memberships/${teamId}`).set(null);
+
+  if (!isActiveTeam) return; // left a different team than the one currently open — nothing else to do
+
+  const resolved = await resolveActiveTeam(uid, firebase.auth().currentUser.email);
+  if (resolved) {
+    await activateTeam(resolved.teamId, resolved.login);
+  } else {
+    currentUser = null;
+    pendingAuth = { uid, email: firebase.auth().currentUser.email, displayName: "" };
+    teamGateMode = "login";
+    showTeamGate();
+  }
+}
+
 function logout() {
-  if (useCloud && firebase.auth().currentUser) firebase.auth().signOut();
+  detachTeamListeners();
+  if (useCloud && firebase.auth().currentUser) {
+    unsubscribePersonalGoals(firebase.auth().currentUser.uid);
+    firebase.auth().signOut();
+  }
   currentUser = null;
+  pendingAuth = null;
+  personalGoals = {};
   localStorage.removeItem("tc_session");
   $("#appScreen").hidden = true;
+  $("#teamGateScreen").hidden = true;
   $("#loginScreen").hidden = false;
   $("#loginForm").reset();
 }
@@ -554,8 +1224,19 @@ function renderHome() {
     ? `🔥 ${streak.current} ${daysWord(streak.current)} подряд`
     : "Начни серию сегодня!";
 
-  const daysLeft = computeDaysLeft();
-  $("#countdownNum").textContent = daysLeft > 0 ? daysLeft : (daysLeft === 0 ? "🎉" : "🌊");
+  const isGoalCompleted = activeTeamMeta.status === "completed";
+  $("#editTripBtn").hidden = isGoalCompleted || !isTeamOwner();
+  if (isGoalCompleted) {
+    $("#countdownNum").textContent = "🎉";
+    $("#countdownTitle").textContent = "Цель завершена";
+    $("#countdownSub").textContent = activeTripDate.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+  } else {
+    const daysLeft = computeDaysLeft();
+    $("#countdownNum").textContent = daysLeft > 0 ? daysLeft : (daysLeft === 0 ? "🎉" : "🌊");
+    $("#countdownTitle").textContent = `До ${activeTeamMeta.destination || "Турции"}`;
+    $("#countdownSub").textContent = activeTripDate.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+  }
+  renderGoalCompletedCard(isGoalCompleted);
 
   const motivation = pick(MOTIVATION_DAILY);
   $("#motivationEmoji").textContent = motivation.emoji;
@@ -667,7 +1348,7 @@ function updateStepsEntry(id, steps, date) {
   entry.steps = steps;
   entry.points = pointsForSteps(steps);
   entry.date = date || entry.date;
-  if (useCloud) db.ref(`activities/${currentUser.login}/${id}`).update({ steps: entry.steps, points: entry.points, date: entry.date });
+  if (useCloud) db.ref(teamPath(`activities/${currentUser.login}/${id}`)).update({ steps: entry.steps, points: entry.points, date: entry.date });
   else persistLocal();
   showToast("✏️", "Запись обновлена!");
   renderHome();
@@ -682,7 +1363,7 @@ function updateWorkoutEntry(id, type, minutes, calories, date) {
   entry.points = pointsForWorkout(minutes, type);
   entry.date = date || entry.date;
   if (useCloud) {
-    db.ref(`activities/${currentUser.login}/${id}`).update({
+    db.ref(teamPath(`activities/${currentUser.login}/${id}`)).update({
       workoutType: entry.workoutType,
       workoutMinutes: entry.workoutMinutes,
       workoutCalories: entry.workoutCalories,
@@ -702,9 +1383,9 @@ function deleteEntry(id) {
   if (comments[id]) delete comments[id];
   if (reactions[id]) delete reactions[id];
   if (useCloud) {
-    db.ref(`activities/${currentUser.login}/${id}`).remove();
-    db.ref(`comments/${id}`).remove();
-    db.ref(`reactions/${id}`).remove();
+    db.ref(teamPath(`activities/${currentUser.login}/${id}`)).remove();
+    db.ref(teamPath(`comments/${id}`)).remove();
+    db.ref(teamPath(`reactions/${id}`)).remove();
   } else {
     persistLocal();
   }
@@ -890,6 +1571,42 @@ function renderWeekChart() {
   });
 }
 
+// Shows/populates the "goal completed" card on Home. Reads the frozen
+// summary from the most recently closed history entry (not a live
+// recompute) so the numbers stay exactly what they were the moment the
+// goal closed, even if people keep quietly logging old activity after.
+function renderGoalCompletedCard(isCompleted) {
+  const card = $("#goalCompletedCard");
+  if (!card) return;
+  card.hidden = !isCompleted;
+  if (!isCompleted) return;
+
+  const entries = Object.values(teamHistory || {});
+  const latest = entries.length
+    ? entries.reduce((a, b) => (b.closedAt > a.closedAt ? b : a))
+    : null;
+  const summary = (latest && latest.summary) || computeGoalSummary();
+  const name = (latest && latest.name) || activeTeamMeta.name || "Поездка";
+  const tripDate = (latest && latest.tripDate) || activeTeamMeta.tripDate;
+
+  $("#goalCompletedSub").textContent = tripDate
+    ? `${name} · ${new Date(tripDate).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })}`
+    : name;
+
+  $("#goalSummaryList").innerHTML = USERS.map((u) => {
+    const s = summary[u.login] || { totalSteps: 0, totalWorkoutMinutes: 0, points: 0 };
+    return `<li class="goal-summary-row">
+      <img class="goal-summary-avatar" src="${avatarSrc(u.avatar)}" alt="">
+      <span class="goal-summary-name">${u.name}</span>
+      <span class="goal-summary-stat">${nf(s.totalSteps)} шагов · ${nf(s.totalWorkoutMinutes)} мин · ${nf(s.points)} очков</span>
+    </li>`;
+  }).join("");
+
+  const isOwner = isTeamOwner();
+  $("#startNewGoalBtn").hidden = !isOwner;
+  $("#goalCompletedHint").hidden = isOwner;
+}
+
 const REACTION_EMOJIS = ["🔥", "👏", "💪", "🎉", "😍"];
 
 // ---------- RENDER: FEED ----------
@@ -963,7 +1680,7 @@ function addCommentFromItem(itemEl) {
   const comment = { login: currentUser.login, name: currentUser.name, text, ts: Date.now() };
   if (!comments[id]) comments[id] = {};
   comments[id][cid] = comment;
-  if (useCloud) db.ref(`comments/${id}/${cid}`).set(comment);
+  if (useCloud) db.ref(teamPath(`comments/${id}/${cid}`)).set(comment);
   else persistLocal();
   renderFeed();
 }
@@ -972,7 +1689,7 @@ function deleteComment(itemId, cid) {
   if (!comments[itemId] || !comments[itemId][cid]) return;
   delete comments[itemId][cid];
   if (Object.keys(comments[itemId]).length === 0) delete comments[itemId];
-  if (useCloud) db.ref(`comments/${itemId}/${cid}`).remove();
+  if (useCloud) db.ref(teamPath(`comments/${itemId}/${cid}`)).remove();
   else persistLocal();
   renderFeed();
 }
@@ -983,10 +1700,10 @@ function toggleReaction(itemId, emoji) {
   const already = !!reactions[itemId][emoji][currentUser.login];
   if (already) {
     delete reactions[itemId][emoji][currentUser.login];
-    if (useCloud) db.ref(`reactions/${itemId}/${emoji}/${currentUser.login}`).remove();
+    if (useCloud) db.ref(teamPath(`reactions/${itemId}/${emoji}/${currentUser.login}`)).remove();
   } else {
     reactions[itemId][emoji][currentUser.login] = true;
-    if (useCloud) db.ref(`reactions/${itemId}/${emoji}/${currentUser.login}`).set(true);
+    if (useCloud) db.ref(teamPath(`reactions/${itemId}/${emoji}/${currentUser.login}`)).set(true);
   }
   if (Object.keys(reactions[itemId][emoji]).length === 0) delete reactions[itemId][emoji];
   if (!useCloud) persistLocal();
@@ -1012,7 +1729,7 @@ function renderTeam() {
       const lastIdx = bucket.values.length - 1;
       const pointRadius = bucket.values.map((v, i) => (i === lastIdx ? 4 : v > 0 ? 3 : 0));
       const pointHitRadius = bucket.values.map(() => 12);
-      const teamColor = TEAM_CHART_COLORS[u.login] || u.color;
+      const teamColor = teamColorFor(u.login);
       const lineColor = teamColor;
       const dotColor = teamColor;
       return {
@@ -1114,6 +1831,8 @@ function renderProfile() {
   $("#profileName").textContent = currentUser.name;
   $("#profileLogin").textContent = "@" + currentUser.login;
   $("#profileGoal").textContent = `цель: ${nf(currentUser.dailyGoal || DAILY_STEP_GOAL)} шагов/день`;
+  $("#teamNameLabel").textContent = activeTeamMeta.name || "Команда";
+  $("#teamInviteCode").textContent = activeTeamMeta.inviteCode || "——————";
   const badge = $("#syncBadge");
   badge.textContent = useCloud ? "☁️ синхронизировано со всеми" : "📱 только на этом устройстве";
   badge.classList.toggle("cloud", useCloud);
@@ -1123,6 +1842,61 @@ function renderProfile() {
   $("#statWorkouts").textContent = t.totalWorkouts;
   $("#statBestStreak").textContent = s.best;
   $("#statPoints").textContent = nf(t.points);
+  renderTripHistory();
+}
+
+// Archive of past closed goals — newest first. Each entry is the frozen
+// summary written by closeActiveGoal(), so it reflects the team roster and
+// numbers exactly as they stood when that goal wrapped up.
+// Renders from personalGoals (this account's own permanent archive), not
+// teamHistory (the currently active team's) — so it stays the same no
+// matter which team is open right now, and keeps showing goals closed in
+// teams this person has since left.
+function renderTripHistory() {
+  const wrap = $("#tripHistoryList");
+  const empty = $("#tripHistoryEmpty");
+  if (!wrap) return;
+  const entries = Object.entries(personalGoals || {}).sort((a, b) => (b[1].closedAt || 0) - (a[1].closedAt || 0));
+  if (!entries.length) {
+    wrap.innerHTML = "";
+    if (empty) empty.hidden = false;
+    return;
+  }
+  if (empty) empty.hidden = true;
+  const medals = ["🥇", "🥈", "🥉"];
+  wrap.innerHTML = entries.map(([id, h]) => {
+    const dateLabel = h.tripDate
+      ? new Date(h.tripDate).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })
+      : "";
+    const members = Object.entries(h.summary || {})
+      .map(([login, m]) => ({ ...m, login }))
+      .sort((a, b) => (b.totalSteps || 0) - (a.totalSteps || 0))
+      .map((m, i) => {
+        // "Me" always resolves to my current avatar, even for a goal closed
+        // in a team I've since left/switched away from; teammates only
+        // resolve if this happens to be the team currently open.
+        const u = m.login === h.myLogin ? currentUser : USERS.find((x) => x.login === m.login);
+        const medal = medals[i];
+        const rankClass = medal ? "trip-history-member-rank" : "trip-history-member-rank trip-history-member-rank-num";
+        return `<li class="trip-history-member${i === 0 ? " trip-history-member-top" : ""}">
+          <span class="${rankClass}">${medal || (i + 1)}</span>
+          <img class="trip-history-member-avatar" src="${avatarSrc(u ? u.avatar : "face1")}" alt="">
+          <span class="trip-history-member-name">${m.name || ""}</span>
+          <span class="trip-history-member-stat">${nf(m.totalSteps || 0)} шагов · ${nf(m.totalWorkoutMinutes || 0)} мин · ${nf(m.points || 0)} очков</span>
+        </li>`;
+      })
+      .join("");
+    return `<li class="trip-history-entry">
+      <div class="trip-history-entry-head">
+        <span class="trip-history-entry-emoji">🏁</span>
+        <div>
+          <div class="trip-history-entry-title">${h.name || "Поездка"}</div>
+          ${dateLabel ? `<div class="trip-history-entry-date">${dateLabel}</div>` : ""}
+        </div>
+      </div>
+      <ul class="trip-history-member-list">${members}</ul>
+    </li>`;
+  }).join("");
 }
 
 // ---------- ACTIVITY ADDING ----------
@@ -1132,7 +1906,7 @@ function addStepsEntry(steps, date) {
   const entry = { id, date: date || getTodayStr(), type: "steps", steps, points: pointsForSteps(steps), ts: Date.now() };
   if (!activities[currentUser.login]) activities[currentUser.login] = {};
   activities[currentUser.login][id] = entry;
-  if (useCloud) db.ref(`activities/${currentUser.login}/${id}`).set(entry);
+  if (useCloud) db.ref(teamPath(`activities/${currentUser.login}/${id}`)).set(entry);
   else persistLocal();
   afterAdd("steps", before);
 }
@@ -1142,7 +1916,7 @@ function addWorkoutEntry(type, minutes, calories, date) {
   const entry = { id, date: date || getTodayStr(), type: "workout", workoutType: type, workoutMinutes: minutes, workoutCalories: calories || null, points: pointsForWorkout(minutes, type), ts: Date.now() };
   if (!activities[currentUser.login]) activities[currentUser.login] = {};
   activities[currentUser.login][id] = entry;
-  if (useCloud) db.ref(`activities/${currentUser.login}/${id}`).set(entry);
+  if (useCloud) db.ref(teamPath(`activities/${currentUser.login}/${id}`)).set(entry);
   else persistLocal();
   afterAdd("workout", before);
 }
@@ -1189,33 +1963,194 @@ function switchTab(tab) {
 // ---------- APP BOOT ----------
 function showApp() {
   $("#loginScreen").hidden = true;
+  $("#teamGateScreen").hidden = true;
   $("#appScreen").hidden = false;
   switchTab("home");
 }
 
+// Switches the Войти/Регистрация toggle on the login screen — shared by the
+// tab buttons themselves and by "Назад" on the team-gate screen, which
+// resets back to "Войти" for a clean slate.
+function setAuthMode(mode) {
+  authMode = mode;
+  const registering = mode === "register";
+  $("#authModeSegmented").querySelectorAll(".seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
+  $("#nameField").hidden = !registering;
+  $("#nameInput").required = registering;
+  $("#loginSubmitBtn").textContent = registering ? "Зарегистрироваться ✈️" : "Войти ✈️";
+  $("#loginHint").textContent = registering
+    ? "Придумайте пароль от 6 символов — аккаунт создастся автоматически."
+    : "Введите email и пароль, которые вы уже использовали.";
+  $("#loginError").hidden = true;
+}
+
 function wireEvents() {
+  $("#authModeSegmented").querySelectorAll(".seg-btn").forEach((btn) => {
+    btn.addEventListener("click", () => setAuthMode(btn.dataset.mode));
+  });
+
   $("#loginForm").addEventListener("submit", async (e) => {
     e.preventDefault();
-    const login = $("#loginInput").value;
+    const name = $("#nameInput").value.trim();
+    const email = $("#loginInput").value;
     const password = $("#passwordInput").value;
     const btn = $("#loginSubmitBtn");
+    const registering = authMode === "register";
     btn.disabled = true;
-    btn.textContent = "Входим...";
-    const result = await attemptLogin(login, password);
+    btn.textContent = registering ? "Регистрируем..." : "Входим...";
+    const result = await attemptLogin(email, password, authMode);
     btn.disabled = false;
-    btn.textContent = "Войти ✈️";
-    if (result.ok) {
-      $("#loginError").hidden = true;
-      if (!useCloud) localStorage.setItem("tc_session", currentUser.login);
-      showApp();
-    } else {
+    btn.textContent = registering ? "Зарегистрироваться ✈️" : "Войти ✈️";
+    if (!result.ok) {
       $("#loginError").textContent = result.error;
       $("#loginError").hidden = false;
+      return;
     }
+    $("#loginError").hidden = true;
+    if (!useCloud) {
+      // Local demo mode already resolved currentUser inside attemptLogin.
+      localStorage.setItem("tc_session", currentUser.login);
+      showApp();
+      return;
+    }
+    await enterTeam(result.uid, result.email, name);
+  });
+
+  $("#teamGateSegmented").querySelectorAll(".seg-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      $("#teamGateSegmented").querySelectorAll(".seg-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      const mode = btn.dataset.gate;
+      $("#createTeamForm").hidden = mode !== "create";
+      $("#joinTeamForm").hidden = mode !== "join";
+    });
+  });
+
+  $("#createTeamForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!pendingAuth) return;
+    const name = $("#teamNameInput").value.trim();
+    const destination = $("#teamDestinationInput").value.trim();
+    const tripDate = $("#teamTripDateInput").value;
+    if (!name || !destination || !tripDate) return;
+    const btn = $("#createTeamBtn");
+    btn.disabled = true;
+    btn.textContent = "Создаём...";
+    try {
+      const { teamId, login } = await createTeam(pendingAuth.uid, name, tripDate, pendingAuth.displayName || "Без имени", destination);
+      $("#createTeamError").hidden = true;
+      await activateTeam(teamId, login);
+    } catch (err) {
+      console.warn("Не удалось создать команду:", err);
+      $("#createTeamError").textContent = "Не удалось создать команду. Проверьте соединение и попробуйте ещё раз.";
+      $("#createTeamError").hidden = false;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Создать команду";
+    }
+  });
+
+  $("#joinTeamForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!pendingAuth) return;
+    const code = $("#teamCodeInput").value.trim();
+    if (!code) return;
+    const btn = $("#joinTeamBtn");
+    btn.disabled = true;
+    btn.textContent = "Присоединяемся...";
+    const result = await joinTeamByCode(pendingAuth.uid, code, pendingAuth.displayName || "Без имени");
+    btn.disabled = false;
+    btn.textContent = "Присоединиться";
+    if (result.error) {
+      $("#joinTeamError").textContent = result.error;
+      $("#joinTeamError").hidden = false;
+      return;
+    }
+    $("#joinTeamError").hidden = true;
+    await activateTeam(result.teamId, result.login);
+  });
+
+  $("#teamGateBackBtn").addEventListener("click", () => {
+    if (teamGateMode === "addTeam") {
+      // Just came from "Вступить ещё в одну команду" mid-session — go back
+      // to the app, not log out of it.
+      pendingAuth = null;
+      $("#teamGateScreen").hidden = true;
+      showApp();
+      switchTab("profile");
+      return;
+    }
+    logout(); // signs out of the just-created/just-signed-in session and shows the login screen again
+    setAuthMode("login");
   });
 
   $("#logoutBtn").addEventListener("click", logout);
   $("#logoutBtn2").addEventListener("click", logout);
+
+  $("#copyInviteBtn").addEventListener("click", async () => {
+    const code = activeTeamMeta.inviteCode;
+    if (!code) return;
+    try {
+      await navigator.clipboard.writeText(code);
+      showToast("📋", "Код скопирован!");
+    } catch (e) {
+      showToast("⚠️", "Не удалось скопировать — выделите код вручную");
+    }
+  });
+
+  // "Вступить ещё в одну команду" reuses the same create/join screen as
+  // login, just mid-session: seeds pendingAuth from the live Firebase Auth
+  // session (rather than clearing currentUser) so createTeamForm/joinTeamForm
+  // work completely unchanged, and marks the mode as "addTeam" so the
+  // "Назад" button returns to the app instead of logging out.
+  $("#joinAnotherTeamBtn").addEventListener("click", () => {
+    if (!useCloud || !firebase.auth().currentUser || !currentUser) return;
+    pendingAuth = { uid: firebase.auth().currentUser.uid, email: firebase.auth().currentUser.email, displayName: currentUser.name };
+    teamGateMode = "addTeam";
+    showTeamGate();
+  });
+
+  $("#switchTeamBtn").addEventListener("click", async () => {
+    const list = $("#teamSwitchList");
+    if (!list.hidden) { list.hidden = true; return; }
+    if (!useCloud || !firebase.auth().currentUser) return;
+    list.hidden = false;
+    list.innerHTML = `<div class="team-switch-loading">Загружаем...</div>`;
+    const uid = firebase.auth().currentUser.uid;
+    const snap = await db.ref(`users/${uid}/memberships`).once("value");
+    const memberships = snap.val() || {};
+    const teamIds = Object.keys(memberships);
+    if (teamIds.length <= 1) {
+      list.innerHTML = `<div class="team-switch-empty">Вы состоите только в этой команде</div>`;
+      return;
+    }
+    const rows = await Promise.all(teamIds.map(async (teamId) => {
+      const metaSnap = await db.ref(`teams/${teamId}/meta/name`).once("value");
+      const name = metaSnap.val() || "Команда";
+      const isActive = teamId === activeTeamId;
+      return `<button type="button" class="team-switch-item${isActive ? " active" : ""}" data-team-id="${teamId}" ${isActive ? "disabled" : ""}>
+        <span class="team-switch-item-name">${name}</span>
+        <span class="team-switch-item-status">${isActive ? "сейчас здесь" : "перейти →"}</span>
+      </button>`;
+    }));
+    list.innerHTML = rows.join("");
+  });
+
+  $("#teamSwitchList").addEventListener("click", async (e) => {
+    const btn = e.target.closest(".team-switch-item");
+    if (!btn || btn.disabled) return;
+    const teamId = btn.dataset.teamId;
+    $("#teamSwitchList").hidden = true;
+    await switchToTeam(teamId);
+    showToast("🔀", "Команда переключена!");
+  });
+
+  $("#leaveTeamBtn").addEventListener("click", async () => {
+    if (!currentUser) return;
+    const teamName = activeTeamMeta.name || "этой команды";
+    if (!window.confirm(`Выйти из «${teamName}»? Ваша активность останется в истории команды, но вы перестанете быть участником.`)) return;
+    await leaveTeam(activeTeamId);
+    showToast("👋", "Вы вышли из команды");
+  });
 
   document.querySelectorAll(".nav-btn").forEach((btn) => {
     btn.addEventListener("click", () => switchTab(btn.dataset.tab));
@@ -1324,6 +2259,14 @@ function wireEvents() {
     body.hidden = !body.hidden;
   });
 
+  $("#tripHistoryToggle").addEventListener("click", () => {
+    const body = $("#tripHistoryBody");
+    const chevron = $("#tripHistoryChevron");
+    const willOpen = body.hidden;
+    body.hidden = !willOpen;
+    chevron.classList.toggle("open", willOpen);
+  });
+
   function updateAvatarPreview() {
     const avatar = ($("#avatarGrid .avatar-choice.selected") || {}).dataset?.avatar || currentUser.avatar;
     const gradient = ($("#gradientGrid .gradient-choice.selected") || {}).dataset?.gradient || currentUser.avatarGradient;
@@ -1333,7 +2276,6 @@ function wireEvents() {
 
   $("#editProfileBtn").addEventListener("click", () => {
     $("#profileNameInput").value = currentUser.name;
-    $("#profileGoalInput").value = currentUser.dailyGoal || DAILY_STEP_GOAL;
     document.querySelectorAll("#avatarGrid .avatar-choice").forEach((btn) => {
       btn.classList.toggle("selected", btn.dataset.avatar === currentUser.avatar);
     });
@@ -1367,12 +2309,63 @@ function wireEvents() {
     const avatar = selectedAvatarBtn ? selectedAvatarBtn.dataset.avatar : currentUser.avatar;
     const selectedGradientBtn = $("#gradientGrid .gradient-choice.selected");
     const avatarGradient = selectedGradientBtn ? selectedGradientBtn.dataset.gradient : (currentUser.avatarGradient || DEFAULT_AVATAR_GRADIENT);
-    let goal = parseInt($("#profileGoalInput").value, 10);
+    closeModal("profileModal");
+    saveProfile(currentUser.login, { name, avatar, avatarGradient });
+    showToast("✏️", "Профиль обновлён!");
+    rerenderCurrentTab();
+  });
+
+  $("#editGoalBtn").addEventListener("click", () => {
+    $("#stepsGoalInput").value = currentUser.dailyGoal || DAILY_STEP_GOAL;
+    openModal("editGoalModal");
+  });
+
+  $("#saveGoalBtn").addEventListener("click", () => {
+    let goal = parseInt($("#stepsGoalInput").value, 10);
     if (!goal || goal < 1000) goal = DAILY_STEP_GOAL;
     if (goal > 30000) goal = 30000;
-    closeModal("profileModal");
-    saveProfile(currentUser.login, { name, avatar, avatarGradient, dailyGoal: goal });
-    showToast("✏️", "Профиль обновлён!");
+    closeModal("editGoalModal");
+    saveProfile(currentUser.login, { dailyGoal: goal });
+    showToast("👣", "Цель обновлена!");
+    rerenderCurrentTab();
+  });
+
+  $("#editTripBtn").addEventListener("click", () => {
+    tripModalMode = "edit";
+    $("#editTripModalTitle").textContent = "Изменить поездку ✈️";
+    $("#tripNameInput").value = activeTeamMeta.name || "";
+    $("#tripDestinationInput").value = activeTeamMeta.destination || "";
+    $("#tripDateInput").value = formatDate(activeTripDate);
+    $("#editTripError").hidden = true;
+    openModal("editTripModal");
+  });
+
+  $("#startNewGoalBtn").addEventListener("click", () => {
+    tripModalMode = "new";
+    $("#editTripModalTitle").textContent = "Новая цель ✈️";
+    $("#tripNameInput").value = "";
+    $("#tripDestinationInput").value = "";
+    $("#tripDateInput").value = "";
+    $("#editTripError").hidden = true;
+    openModal("editTripModal");
+  });
+
+  $("#saveTripBtn").addEventListener("click", () => {
+    if (!isTeamOwner()) { closeModal("editTripModal"); return; } // defense in depth — button is already hidden for non-owners
+    const name = $("#tripNameInput").value.trim();
+    const destination = $("#tripDestinationInput").value.trim();
+    const tripDate = $("#tripDateInput").value;
+    if (!name || !destination || !tripDate) {
+      $("#editTripError").hidden = false;
+      return;
+    }
+    const patch = { name, destination, tripDate };
+    if (tripModalMode === "new") {
+      Object.assign(patch, { status: "active", closedAt: null, createdAt: Date.now() });
+    }
+    closeModal("editTripModal");
+    saveTripMeta(patch);
+    showToast("✈️", tripModalMode === "new" ? "Новая цель запущена!" : "Данные поездки обновлены!");
     rerenderCurrentTab();
   });
 }
@@ -1389,24 +2382,25 @@ function wireSegmented(containerSel, dataAttr, onChange) {
 }
 
 async function init() {
-  await loadUsersData();
-  initStorage();
+  await loadUsersData(); // seeds USERS for local demo mode / before a team loads
+  initFirebaseApp();
   wireEvents();
 
   const hint = $("#loginHint");
   if (hint) {
     hint.textContent = useCloud
-      ? "Первый вход — придумайте пароль (от 6 символов), дальше входите с ним же."
-      : "⚠️ Firebase не настроен — вход без пароля, только на этом устройстве (демо-режим).";
+      ? "Введите email и пароль, которые вы уже использовали."
+      : "⚠️ Firebase не настроен — доступны только исходные участницы, без пароля, только на этом устройстве (демо-режим).";
   }
 
   if (useCloud && typeof firebase !== "undefined" && firebase.auth) {
     // Firebase persists its own session — restore it automatically if present.
-    firebase.auth().onAuthStateChanged((fbUser) => {
-      if (fbUser && fbUser.email && !currentUser) {
-        const login = fbUser.email.split("@")[0];
-        const u = USERS.find((x) => x.login === login);
-        if (u) { currentUser = u; showApp(); }
+    let restoring = false;
+    firebase.auth().onAuthStateChanged(async (fbUser) => {
+      if (fbUser && fbUser.email && !currentUser && !restoring) {
+        restoring = true;
+        await enterTeam(fbUser.uid, fbUser.email, "");
+        restoring = false;
       }
     });
     $("#loginScreen").hidden = false;

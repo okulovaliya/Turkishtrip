@@ -20,13 +20,22 @@
     <div class="login-hero">
       <div class="login-emoji">🌴☀️🍹</div>
       <h1>Turkey Challenge</h1>
-      <p class="login-sub">Готовимся к отпуску втроём — шаг за шагом</p>
+      <p class="login-sub">Готовимся к отпуску вместе — шаг за шагом</p>
     </div>
 
     <form id="loginForm" class="login-card">
+      <div class="segmented" id="authModeSegmented">
+        <button class="seg-btn active" type="button" data-mode="login">Войти</button>
+        <button class="seg-btn" type="button" data-mode="register">Регистрация</button>
+      </div>
+
+      <label class="field" id="nameField" hidden>
+        <span>Ваше имя</span>
+        <input type="text" id="nameInput" autocomplete="name" placeholder="Как вас зовут?">
+      </label>
       <label class="field">
-        <span>Логин</span>
-        <input type="text" id="loginInput" autocomplete="username" placeholder="tanya / lilu / nastya" required>
+        <span>Email</span>
+        <input type="email" id="loginInput" autocomplete="username" placeholder="you@example.com" required>
       </label>
       <label class="field">
         <span>Пароль</span>
@@ -34,8 +43,55 @@
       </label>
       <p id="loginError" class="login-error" hidden></p>
       <button type="submit" class="btn btn-primary btn-block" id="loginSubmitBtn">Войти ✈️</button>
-      <p class="login-hint" id="loginHint">Первый вход — придумайте пароль (от 6 символов), дальше входите с ним же.</p>
+      <p class="login-hint" id="loginHint">Введите email и пароль, которые вы уже использовали.</p>
     </form>
+  </section>
+
+  <!-- ===== TEAM GATE SCREEN (create or join a team) ===== -->
+  <section id="teamGateScreen" class="screen login-screen" hidden>
+    <div class="login-bg-blob blob1"></div>
+    <div class="login-bg-blob blob2"></div>
+
+    <div class="login-hero">
+      <div class="login-emoji">🧳✈️🗺️</div>
+      <h1>Почти на месте!</h1>
+      <p class="login-sub">Создайте свою команду или присоединитесь к существующей по коду</p>
+    </div>
+
+    <div class="login-card team-gate-tabs">
+      <div class="segmented" id="teamGateSegmented">
+        <button class="seg-btn active" type="button" data-gate="create">Создать команду</button>
+        <button class="seg-btn" type="button" data-gate="join">Есть код</button>
+      </div>
+
+      <form id="createTeamForm" class="team-gate-form">
+        <label class="field">
+          <span>Название команды</span>
+          <input type="text" id="teamNameInput" placeholder="Например, Отпуск в Турции" required>
+        </label>
+        <label class="field">
+          <span>До чего считаем дни</span>
+          <input type="text" id="teamDestinationInput" placeholder="Например: Турции, Дубая, отпуска" maxlength="30" required>
+        </label>
+        <label class="field">
+          <span>Дата поездки</span>
+          <input type="date" id="teamTripDateInput" required>
+        </label>
+        <p id="createTeamError" class="login-error" hidden></p>
+        <button type="submit" class="btn btn-primary btn-block" id="createTeamBtn">Создать команду</button>
+      </form>
+
+      <form id="joinTeamForm" class="team-gate-form" hidden>
+        <label class="field">
+          <span>Код приглашения</span>
+          <input type="text" id="teamCodeInput" placeholder="Например, X7K2QM" autocapitalize="characters" required>
+        </label>
+        <p id="joinTeamError" class="login-error" hidden></p>
+        <button type="submit" class="btn btn-primary btn-block" id="joinTeamBtn">Присоединиться</button>
+      </form>
+    </div>
+
+    <button type="button" class="btn btn-secondary btn-block team-gate-back" id="teamGateBackBtn">← Назад</button>
   </section>
 
   <!-- ===== APP SCREEN ===== -->
@@ -62,10 +118,12 @@
       <div class="stat-squares">
         <div class="stat-square stat-square-steps">
           <div class="stat-square-top">
-            <svg class="stat-square-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <ellipse cx="8.5" cy="16" rx="3" ry="4.3" transform="rotate(-18 8.5 16)"/>
-              <ellipse cx="16" cy="8" rx="3" ry="4.3" transform="rotate(18 16 8)"/>
-            </svg>
+            <button type="button" class="stat-square-icon-btn" id="editGoalBtn" title="Изменить цель по шагам" aria-label="Изменить цель по шагам в день">
+              <svg class="stat-square-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M4 20l.9-3.9a2 2 0 0 1 .53-.97L15.6 5c.8-.8 2.1-.8 2.9 0l.5.5c.8.8.8 2.1 0 2.9L8.87 18.57a2 2 0 0 1-.97.53L4 20z"/>
+                <path d="M14 6.5l3.5 3.5"/>
+              </svg>
+            </button>
           </div>
           <div class="mini-ring">
             <svg class="mini-ring-svg" viewBox="0 0 100 100">
@@ -83,18 +141,28 @@
 
         <div class="stat-square">
           <div class="stat-square-top">
-            <svg class="stat-square-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <rect x="4" y="5.5" width="16" height="15" rx="2.5"/>
-              <path d="M4 9.5h16M8 3.5v3M16 3.5v3"/>
-            </svg>
+            <button type="button" class="stat-square-icon-btn" id="editTripBtn" title="Изменить название и дату" aria-label="Изменить название и дату события">
+              <svg class="stat-square-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M4 20l.9-3.9a2 2 0 0 1 .53-.97L15.6 5c.8-.8 2.1-.8 2.9 0l.5.5c.8.8.8 2.1 0 2.9L8.87 18.57a2 2 0 0 1-.97.53L4 20z"/>
+                <path d="M14 6.5l3.5 3.5"/>
+              </svg>
+            </button>
           </div>
           <div class="stat-square-big-wrap">
             <span class="stat-square-big" id="countdownNum">--</span>
             <span class="stat-square-unit">дней</span>
           </div>
-          <div class="stat-square-title">До Турции</div>
+          <div class="stat-square-title" id="countdownTitle">До Турции</div>
           <div class="stat-square-sub" id="countdownSub">28 августа 2026</div>
         </div>
+      </div>
+
+      <div class="card goal-completed-card" id="goalCompletedCard" hidden>
+        <div class="card-title" id="goalCompletedTitle">🎉 Цель завершена</div>
+        <div class="goal-completed-sub" id="goalCompletedSub"></div>
+        <ul class="goal-summary-list" id="goalSummaryList"></ul>
+        <button type="button" class="btn btn-primary btn-block" id="startNewGoalBtn" hidden>Начать новую цель ✈️</button>
+        <p class="goal-completed-hint" id="goalCompletedHint" hidden>Дождитесь, пока владелец команды запустит новую цель</p>
       </div>
 
       <div class="quick-actions">
@@ -237,6 +305,23 @@
         <div class="sync-badge" id="syncBadge">—</div>
       </div>
 
+      <div class="card team-invite-card">
+        <div class="card-title" id="teamNameLabel">Команда</div>
+        <div class="team-invite-row">
+          <span class="team-invite-code" id="teamInviteCode">——————</span>
+          <button type="button" class="btn btn-secondary btn-sm" id="copyInviteBtn">Скопировать</button>
+        </div>
+        <p class="team-invite-hint">Отправьте этот код друзьям, чтобы они присоединились к вашей команде</p>
+
+        <div class="team-switch-list" id="teamSwitchList" hidden></div>
+
+        <div class="team-actions-row">
+          <button type="button" class="btn btn-secondary btn-sm" id="switchTeamBtn">Сменить команду</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="joinAnotherTeamBtn">Добавить команду</button>
+        </div>
+        <button type="button" class="btn btn-secondary btn-block btn-leave" id="leaveTeamBtn">Выйти из команды</button>
+      </div>
+
       <div class="stat-grid">
         <div class="stat-box">
           <div class="stat-num" id="statTotalSteps">0</div>
@@ -253,6 +338,17 @@
         <div class="stat-box">
           <div class="stat-num" id="statPoints">0</div>
           <div class="stat-label">очков</div>
+        </div>
+      </div>
+
+      <div class="card info-card">
+        <button type="button" class="info-card-toggle" id="tripHistoryToggle">
+          <span class="card-title">🏁 Завершённые цели</span>
+          <span class="info-card-chevron" id="tripHistoryChevron">⌄</span>
+        </button>
+        <div class="info-card-body" id="tripHistoryBody" hidden>
+          <p class="trip-history-empty" id="tripHistoryEmpty">Пока ни одна цель не завершена</p>
+          <ul class="trip-history-list" id="tripHistoryList"></ul>
         </div>
       </div>
 
@@ -365,6 +461,10 @@
           <button type="button" class="avatar-choice" data-avatar="face6"><img class="avatar-choice-img" src="avatars/face6.png" alt="Аватар 6"></button>
           <button type="button" class="avatar-choice" data-avatar="face7"><img class="avatar-choice-img" src="avatars/face7.png" alt="Аватар 7"></button>
           <button type="button" class="avatar-choice" data-avatar="face8"><img class="avatar-choice-img" src="avatars/face8.png" alt="Аватар 8"></button>
+          <button type="button" class="avatar-choice" data-avatar="face9"><img class="avatar-choice-img" src="avatars/face9.png" alt="Аватар 9"></button>
+          <button type="button" class="avatar-choice" data-avatar="face10"><img class="avatar-choice-img" src="avatars/face10.png" alt="Аватар 10"></button>
+          <button type="button" class="avatar-choice" data-avatar="face11"><img class="avatar-choice-img" src="avatars/face11.png" alt="Аватар 11"></button>
+          <button type="button" class="avatar-choice" data-avatar="face12"><img class="avatar-choice-img" src="avatars/face12.png" alt="Аватар 12"></button>
         </div>
       </label>
 
@@ -387,14 +487,55 @@
         <input type="text" id="profileNameInput" class="modal-input" placeholder="Ваше имя" maxlength="30">
       </label>
 
-      <label class="field">
-        <span>Цель по шагам в день</span>
-        <input type="number" id="profileGoalInput" class="modal-input" placeholder="Например, 8000" min="1000" max="30000" step="500">
-      </label>
-
       <div class="modal-actions">
         <button class="btn btn-secondary" data-close="profileModal">Отмена</button>
         <button class="btn btn-primary" id="saveProfileBtn">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- EDIT DAILY STEP GOAL MODAL -->
+  <div class="modal-backdrop" id="editGoalModal" hidden>
+    <div class="modal">
+      <div class="modal-title">Цель по шагам 👣</div>
+
+      <label class="field">
+        <span>Цель по шагам в день</span>
+        <input type="number" id="stepsGoalInput" class="modal-input" placeholder="Например, 8000" min="1000" max="30000" step="500">
+      </label>
+
+      <div class="modal-actions">
+        <button class="btn btn-secondary" data-close="editGoalModal">Отмена</button>
+        <button class="btn btn-primary" id="saveGoalBtn">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- EDIT TRIP MODAL -->
+  <div class="modal-backdrop" id="editTripModal" hidden>
+    <div class="modal">
+      <div class="modal-title" id="editTripModalTitle">Изменить поездку ✈️</div>
+
+      <label class="field">
+        <span>Название поездки</span>
+        <input type="text" id="tripNameInput" class="modal-input" placeholder="Например, Turkey Challenge" maxlength="40">
+      </label>
+
+      <label class="field">
+        <span>До чего считаем дни</span>
+        <input type="text" id="tripDestinationInput" class="modal-input" placeholder="Например: Турции, Дубая, отпуска" maxlength="30">
+      </label>
+
+      <label class="field">
+        <span>Дата поездки</span>
+        <input type="date" id="tripDateInput" class="modal-input">
+      </label>
+
+      <p class="login-error" id="editTripError" hidden>Заполните все поля</p>
+
+      <div class="modal-actions">
+        <button class="btn btn-secondary" data-close="editTripModal">Отмена</button>
+        <button class="btn btn-primary" id="saveTripBtn">Сохранить</button>
       </div>
     </div>
   </div>
