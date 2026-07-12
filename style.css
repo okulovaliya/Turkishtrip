@@ -936,7 +936,6 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 14px;
-  padding: 0 20px 24px;
 }
 .badge {
   background: var(--card);
@@ -1048,7 +1047,9 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   position: fixed;
   bottom: calc(20px + env(safe-area-inset-bottom));
   left: 50%;
-  transform: translateX(-50%);
+  transform: translate3d(-50%, 0, 0);
+  -webkit-transform: translate3d(-50%, 0, 0);
+  will-change: transform;
   width: max-content;
   max-width: calc(100% - 32px);
   z-index: 40;
