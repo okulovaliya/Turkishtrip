@@ -1,5 +1,6 @@
 /* ===========================================================
-   Turkey Challenge — mobile fitness prep app for 3 friends
+   Squad Challenge — mobile fitness prep app for friend groups,
+   multi-team, multi-goal (not tied to any one trip or vacation)
    =========================================================== */
 
 /* ---------- FIREBASE DATA MODEL (multi-team, phase 2) ---------------------
@@ -31,8 +32,15 @@
                           activities themselves are never reset/archived)
      activities/{login}/{entryId}   — unchanged shape from before
      comments/{activityId}/{commentId}
-     reactions/{activityId}/{emoji}/{login}
+     reactions/{activityId}/{emoji}/{login}: ms timestamp (was a bare `true`
+       before the notifications bell — every reader only checks truthiness
+       or Object.keys(), so this was a safe change)
      profiles/{login}                — name/avatar/dailyGoal overrides
+     notifSeen/{login}: ms timestamp — when this person last opened the
+       notifications bell in *this* team; a teammate's comment/reaction on
+       their own activity, or a teammate logging new activity at all, newer
+       than this lights up the yellow dot (see
+       hasUnreadNotifications/markNotificationsSeen)
 
    Global (not team-scoped) — added this phase for real registration:
      users/{uid}/memberships/{teamId}: { login }
@@ -55,6 +63,23 @@
          history, so it doesn't change when switching teams.
      inviteCodes/{code}: teamId
        — short-code lookup used by the "join a team" screen.
+     users/{uid}/profile — { name, avatar, avatarGradient, dailyGoal }
+       — mirror of whatever this account last saved in ANY team's profiles/
+         node (see saveProfile). Used only as a seed for teams/{teamId}/
+         profiles/{login} when creating/joining a *new* team (see
+         seedTeamProfile), so a returning person doesn't start a fresh team
+         with a blank name/avatar — not read anywhere else.
+     recipes/{recipeId} — { name, category, ingredients, calories, protein,
+       fat, carbs, comment, authorUid, authorName, createdAt, noMacros }
+       — a single shared "cookbook" for the whole app, deliberately NOT
+         nested under teams/{teamId}/... — same list regardless of which
+         team is active, survives switching/leaving teams entirely (see
+         subscribeToRecipes). Keyed by authorUid (the Firebase Auth uid, not
+         a per-team login, since logins aren't globally unique) so "Мои
+         рецепты" and the edit/delete gate work the same no matter which
+         team the author happens to be in when they wrote it. noMacros:
+         true means calories/protein/fat/carbs are null (the "Без КБЖУ"
+         checkbox was ticked — skips macro validation and rendering).
 
    `activeTeamId` is now a runtime variable (not a constant): it's set once
    login resolves which team the signed-in person belongs to (see
@@ -258,10 +283,26 @@ let chartMetric = "workouts"; // home chart: steps already shown by the ring abo
 let chartPeriod = "day";
 let teamChartMetric = "steps";
 let teamChartPeriod = "day";
+let notifSeenAt = 0; // ms timestamp — comments/reactions on my own activity older than this don't light up the bell
+let notifSeenListenerLogin = null; // which login's notifSeen node is currently listened to, for detachTeamListeners
+let recipes = {}; // recipeId -> recipe — GLOBAL, not team-scoped (see subscribeToRecipes); same for every team/account
+let recipeSearchQuery = "";
+let recipeCategoryFilter = "all"; // "all" | "breakfast" | "lunch" | "dinner" — Журнал tab filter
+let recipeMineOnly = false; // "Мои рецепты" chip on the journal
+let recipeFormCategory = "breakfast"; // selected category inside the create/edit form
+let editingRecipeId = null; // set while the form modal is editing an existing recipe, null while creating a new one
+let viewingRecipeId = null; // which recipe the detail modal is currently showing
 
 // ---------- UTIL ----------
 const $ = (sel) => document.querySelector(sel);
 const pad = (n) => String(n).padStart(2, "0");
+// Standard Russian plural-form picker (1 ингредиент / 2 ингредиента / 5 ингредиентов).
+function pluralRu(n, one, few, many) {
+  const mod10 = n % 10, mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return few;
+  return many;
+}
 
 function formatDate(d) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -486,12 +527,23 @@ async function uniqueLoginForTeam(teamId, name) {
   return `${base}-${i}`;
 }
 
+// Builds the initial profiles/{login} value for a person joining/creating a
+// team: starts from whatever they've already saved at the account level
+// (users/{uid}/profile — avatar, gradient, daily goal, name), so a returning
+// person's next team doesn't start them off blank, but still lets the name
+// typed/carried into *this* join/create action win if there's one to use.
+function seedTeamProfile(accountProfile, displayName) {
+  const name = displayName || (accountProfile && accountProfile.name) || "Без имени";
+  return accountProfile ? { ...accountProfile, name } : { name };
+}
+
 // Creates a brand-new team, makes uid its first member/owner, and returns
 // { teamId, login }. tripDateStr is a plain "YYYY-MM-DD" from a date input.
 async function createTeam(uid, teamName, tripDateStr, displayName, destination) {
   const teamId = `${slugifyName(teamName)}-${randomCode(4).toLowerCase()}`;
   const login = await uniqueLoginForTeam(teamId, displayName);
   const inviteCode = randomCode(6);
+  const accountProfile = (await db.ref(`users/${uid}/profile`).once("value")).val();
   const updates = {};
   updates[`teams/${teamId}/meta`] = {
     name: teamName,
@@ -503,7 +555,7 @@ async function createTeam(uid, teamName, tripDateStr, displayName, destination) 
     migrated: true // brand-new team — nothing legacy to migrate
   };
   updates[`teams/${teamId}/members/${login}`] = { role: "owner", joinedAt: Date.now() };
-  updates[`teams/${teamId}/profiles/${login}`] = { name: displayName };
+  updates[`teams/${teamId}/profiles/${login}`] = seedTeamProfile(accountProfile, displayName);
   updates[`inviteCodes/${inviteCode}`] = teamId;
   updates[`users/${uid}/memberships/${teamId}`] = { login };
   await db.ref().update(updates);
@@ -518,9 +570,10 @@ async function joinTeamByCode(uid, codeRaw, displayName) {
   const teamId = teamIdSnap.val();
   if (!teamId) return { error: "Такой код не найден. Проверьте и попробуйте ещё раз." };
   const login = await uniqueLoginForTeam(teamId, displayName);
+  const accountProfile = (await db.ref(`users/${uid}/profile`).once("value")).val();
   const updates = {};
   updates[`teams/${teamId}/members/${login}`] = { role: "member", joinedAt: Date.now() };
-  updates[`teams/${teamId}/profiles/${login}`] = { name: displayName };
+  updates[`teams/${teamId}/profiles/${login}`] = seedTeamProfile(accountProfile, displayName);
   updates[`users/${uid}/memberships/${teamId}`] = { login };
   await db.ref().update(updates);
   return { teamId, login };
@@ -665,6 +718,15 @@ async function subscribeToActiveTeam() {
     rerenderCurrentTab();
   });
 
+  // My own "last seen notifications" marker for this team — live-synced so
+  // tapping the bell on one device also clears the badge if the same
+  // account happens to be open elsewhere.
+  notifSeenListenerLogin = currentUser.login;
+  db.ref(teamPath(`notifSeen/${currentUser.login}`)).on("value", (snap) => {
+    notifSeenAt = snap.val() || 0;
+    updateNotifBadge();
+  });
+
   const metaSnap = await db.ref(teamPath("meta")).once("value");
   activeTeamMeta = metaSnap.val() || {};
   activeTripDate = activeTeamMeta.tripDate ? new Date(activeTeamMeta.tripDate) : TRIP_DATE;
@@ -708,6 +770,8 @@ function loadLocalFallback() {
   try { reactions = JSON.parse(localStorage.getItem("tc_reactions") || "{}"); } catch (e) { reactions = {}; }
   try { profiles = JSON.parse(localStorage.getItem("tc_profiles") || "{}"); } catch (e) { profiles = {}; }
   try { activeTeamMeta = JSON.parse(localStorage.getItem("tc_teamMeta") || "{}"); } catch (e) { activeTeamMeta = {}; }
+  // Recipes aren't team-scoped even in local demo mode — one shared bucket.
+  try { recipes = JSON.parse(localStorage.getItem("tc_recipes") || "{}"); } catch (e) { recipes = {}; }
   if (activeTeamMeta.tripDate) activeTripDate = new Date(activeTeamMeta.tripDate);
   ensureUserBuckets();
   applyProfileOverrides();
@@ -721,14 +785,26 @@ function persistLocal() {
   localStorage.setItem("tc_reactions", JSON.stringify(reactions));
   localStorage.setItem("tc_profiles", JSON.stringify(profiles));
   localStorage.setItem("tc_teamMeta", JSON.stringify(activeTeamMeta));
+  localStorage.setItem("tc_recipes", JSON.stringify(recipes));
 }
 
 function saveProfile(login, patch) {
   if (!profiles[login]) profiles[login] = {};
   Object.assign(profiles[login], patch);
   applyProfileOverrides();
-  if (useCloud) db.ref(teamPath(`profiles/${login}`)).update(patch);
-  else persistLocal();
+  if (useCloud) {
+    db.ref(teamPath(`profiles/${login}`)).update(patch);
+    // Also mirror onto the account itself (users/{uid}/profile), not just
+    // this one team's roster — so name/avatar/gradient/daily goal follow the
+    // person into whatever team they create or join next, instead of every
+    // new team starting them off blank again. Only when editing your own
+    // profile (the only case saveProfile is actually called with today).
+    if (currentUser && login === currentUser.login && firebase.auth().currentUser) {
+      db.ref(`users/${firebase.auth().currentUser.uid}/profile`).update(patch);
+    }
+  } else {
+    persistLocal();
+  }
 }
 
 // Lets any team member fix a typo'd trip name/date after team creation.
@@ -744,10 +820,11 @@ function saveTripMeta(patch) {
 
 function rerenderCurrentTab() {
   if (!currentUser) return;
+  updateNotifBadge(); // the bell lives on the home tab, but data can change while viewing any tab
   if (currentTab === "home") renderHome();
   else if (currentTab === "feed") renderFeed();
   else if (currentTab === "team") renderTeam();
-  else if (currentTab === "ach") renderAchievements();
+  else if (currentTab === "recipes") renderRecipes();
   else if (currentTab === "profile") renderProfile();
 }
 
@@ -884,6 +961,33 @@ function computeAchievements(login) {
   return ACHIEVEMENTS.map((a) => ({ ...a, unlocked: a.check(ctx) }));
 }
 
+// Same totals/best-streak math as computeTotals/computeStreak, but takes a
+// raw activities-for-one-login object as a plain argument instead of
+// reading it off the module-level `activities` cache — needed by leaveTeam,
+// which can act on a team that isn't the one currently loaded into that
+// cache (see summary at its call site).
+function summarizeActivityEntries(entriesObj) {
+  const list = Object.values(entriesObj || {});
+  let totalSteps = 0, totalWorkouts = 0, totalWorkoutMinutes = 0, points = 0;
+  const byDate = {};
+  list.forEach((e) => {
+    points += e.points || 0;
+    if (e.type === "steps") totalSteps += e.steps;
+    if (e.type === "workout") { totalWorkouts += 1; totalWorkoutMinutes += e.workoutMinutes; }
+    const add = (e.type === "steps" ? e.steps : 0) + (e.type === "workout" ? e.workoutMinutes : 0);
+    byDate[e.date] = (byDate[e.date] || 0) + add;
+  });
+  const activeDates = Object.keys(byDate).filter((d) => byDate[d] > 0).sort();
+  let best = 0, run = 0, prev = null;
+  activeDates.forEach((ds) => {
+    const d = new Date(ds + "T00:00:00");
+    if (prev && (d - prev) / 86400000 === 1) run += 1; else run = 1;
+    if (run > best) best = run;
+    prev = d;
+  });
+  return { totalSteps, totalWorkouts, totalWorkoutMinutes, points, bestStreak: best, entryCount: list.length };
+}
+
 // ---------- GOAL LIFECYCLE (close current goal → history → start new one) ----------
 
 // All-time per-member snapshot frozen into history when a goal closes.
@@ -899,12 +1003,54 @@ function computeGoalSummary() {
     summary[u.login] = {
       name: u.name,
       totalSteps: totals.totalSteps,
+      totalWorkouts: totals.totalWorkouts,
       totalWorkoutMinutes: totals.totalWorkoutMinutes,
       points: totals.points,
       bestStreak: streak.best
     };
   });
   return summary;
+}
+
+// "Профиль" shows steps/workouts/points/streak as belonging to the PERSON,
+// not to whichever team happens to be open right now — switching teams (or
+// having left one) must never make these drop back to zero. Combines the
+// currently active team's live totals (computeTotals/computeStreak already
+// reflect that team's *entire* history, since activities are never reset —
+// see computeGoalSummary's comment above) with the latest known snapshot of
+// every OTHER team this account has ever been part of, from personalGoals.
+// Those snapshots are "cumulative total at that moment", not per-cycle
+// deltas (same reason as above), so only the single most recent one per
+// team is used — adding every snapshot for the same team would double-count.
+function computeLifetimeStats(login) {
+  const live = computeTotals(login);
+  const liveStreak = computeStreak(login);
+
+  const latestByTeam = {};
+  Object.values(personalGoals || {}).forEach((h) => {
+    if (h.teamId === activeTeamId) return; // superseded by the live totals above
+    const s = h.summary && h.summary[h.myLogin];
+    if (!s) return;
+    const existing = latestByTeam[h.teamId];
+    if (!existing || (h.closedAt || 0) > existing.closedAt) {
+      latestByTeam[h.teamId] = { ...s, closedAt: h.closedAt || 0 };
+    }
+  });
+
+  let totalSteps = live.totalSteps;
+  let totalWorkouts = live.totalWorkouts;
+  let totalWorkoutMinutes = live.totalWorkoutMinutes;
+  let points = live.points;
+  let bestStreak = liveStreak.best;
+  Object.values(latestByTeam).forEach((s) => {
+    totalSteps += s.totalSteps || 0;
+    totalWorkouts += s.totalWorkouts || 0; // 0 for entries frozen before this field existed
+    totalWorkoutMinutes += s.totalWorkoutMinutes || 0;
+    points += s.points || 0;
+    if ((s.bestStreak || 0) > bestStreak) bestStreak = s.bestStreak;
+  });
+
+  return { totalSteps, totalWorkouts, totalWorkoutMinutes, points, bestStreak };
 }
 
 // Called after every meta load/update — cheap no-op unless the trip date has
@@ -1041,6 +1187,11 @@ function detachTeamListeners() {
   ["activities", "comments", "reactions", "profiles", "meta", "members", "history"].forEach((node) => {
     db.ref(teamPath(node)).off();
   });
+  if (notifSeenListenerLogin) {
+    db.ref(teamPath(`notifSeen/${notifSeenListenerLogin}`)).off();
+    notifSeenListenerLogin = null;
+  }
+  notifSeenAt = 0; // next team's "seen" state hasn't loaded yet — don't carry the old one over
 }
 
 function showTeamGate() {
@@ -1106,6 +1257,7 @@ async function enterTeam(uid, email, displayName) {
   pendingAuth = { uid, email, displayName };
   teamGateMode = "login";
   subscribeToPersonalGoals(uid); // once per login session, not per team — see the function comment
+  subscribeToRecipes(); // global, not team-scoped either — see the function comment
   const resolved = await resolveActiveTeam(uid, email);
   if (!resolved) {
     showTeamGate();
@@ -1198,6 +1350,48 @@ async function leaveTeam(teamId) {
     return db.ref(`users/${uid}/completedGoals/${cycleId}`).set({ ...h, teamId, myLogin: login });
   }));
 
+  // If the *current*, still-open cycle already has activity from this
+  // person, freeze a personal snapshot of it too before they lose access —
+  // otherwise leaving mid-challenge would wipe out weeks of steps/streak/
+  // points from their own record, purely because the team's goal never
+  // officially closed. Marked leftEarly so it renders differently from a
+  // real finish line (see renderTripHistory). Reads straight from Firebase
+  // rather than the module-level activities cache, since this can be a team
+  // other than the one currently loaded there.
+  const teamMetaSnap = await db.ref(`teams/${teamId}/meta`).once("value");
+  const teamMeta = teamMetaSnap.val() || {};
+  if (teamMeta.status !== "completed") {
+    const [actSnap, profSnap] = await Promise.all([
+      db.ref(`teams/${teamId}/activities/${login}`).once("value"),
+      db.ref(`teams/${teamId}/profiles/${login}`).once("value")
+    ]);
+    const snap = summarizeActivityEntries(actSnap.val());
+    if (snap.entryCount > 0) {
+      const myName = (profSnap.val() && profSnap.val().name) || login;
+      const cycleId = `left-${teamId}-${Date.now()}`;
+      await db.ref(`users/${uid}/completedGoals/${cycleId}`).set({
+        name: teamMeta.name || "",
+        destination: teamMeta.destination || "",
+        tripDate: teamMeta.tripDate || "",
+        startedAt: teamMeta.createdAt || null,
+        closedAt: Date.now(),
+        leftEarly: true,
+        summary: {
+          [login]: {
+            name: myName,
+            totalSteps: snap.totalSteps,
+            totalWorkouts: snap.totalWorkouts,
+            totalWorkoutMinutes: snap.totalWorkoutMinutes,
+            points: snap.points,
+            bestStreak: snap.bestStreak
+          }
+        },
+        teamId,
+        myLogin: login
+      });
+    }
+  }
+
   if (isActiveTeam) detachTeamListeners(); // stop reacting to a team we're about to remove ourselves from (or delete)
 
   // teams/{teamId}/... writes happen while the membership index still
@@ -1225,8 +1419,14 @@ async function leaveTeam(teamId) {
   if (resolved) {
     await activateTeam(resolved.teamId, resolved.login);
   } else {
+    // Carry the real display name over to the create/join-team screen —
+    // there's no "your name" field there (it only asks for a team name /
+    // invite code), so if this were left blank the next team they create or
+    // join would end up named "Без имени" even though nothing about them
+    // was actually lost. Read before nulling currentUser out below.
+    const myName = currentUser ? currentUser.name : "";
     currentUser = null;
-    pendingAuth = { uid, email: firebase.auth().currentUser.email, displayName: "" };
+    pendingAuth = { uid, email: firebase.auth().currentUser.email, displayName: myName };
     teamGateMode = "login";
     showTeamGate();
   }
@@ -1236,11 +1436,13 @@ function logout() {
   detachTeamListeners();
   if (useCloud && firebase.auth().currentUser) {
     unsubscribePersonalGoals(firebase.auth().currentUser.uid);
+    unsubscribeRecipes();
     firebase.auth().signOut();
   }
   currentUser = null;
   pendingAuth = null;
   personalGoals = {};
+  recipes = {};
   localStorage.removeItem("tc_session");
   $("#appScreen").hidden = true;
   $("#teamGateScreen").hidden = true;
@@ -1645,6 +1847,320 @@ function renderGoalCompletedCard(isCompleted) {
 
 const REACTION_EMOJIS = ["🔥", "👏", "💪", "🎉", "😍"];
 
+// ---------- NOTIFICATIONS (comments/reactions on MY activity, or a
+// teammate logging new activity of their own) ----------
+
+// Maps every activityId to the login who posted it, so a comment/reaction
+// can be traced back to "was this on something I posted".
+function buildActivityOwnerMap() {
+  const map = {};
+  Object.keys(activities).forEach((login) => {
+    Object.values(activities[login] || {}).forEach((e) => { map[e.id] = login; });
+  });
+  return map;
+}
+
+// True if, since I last opened the bell/feed, someone *else* has either
+// commented on / reacted to one of my own activity entries, or logged a new
+// activity entry of their own (steps or a workout).
+function hasUnreadNotifications() {
+  if (!currentUser) return false;
+  const ownerOf = buildActivityOwnerMap();
+  for (const activityId in comments) {
+    if (ownerOf[activityId] !== currentUser.login) continue;
+    const list = Object.values(comments[activityId] || {});
+    if (list.some((c) => c.login !== currentUser.login && c.ts > notifSeenAt)) return true;
+  }
+  for (const activityId in reactions) {
+    if (ownerOf[activityId] !== currentUser.login) continue;
+    const byEmoji = reactions[activityId] || {};
+    for (const emoji in byEmoji) {
+      const byLogin = byEmoji[emoji] || {};
+      for (const login in byLogin) {
+        if (login !== currentUser.login && byLogin[login] > notifSeenAt) return true;
+      }
+    }
+  }
+  // A teammate (not me) logging a new activity entry — steps or a workout —
+  // also lights up the bell, same as a comment/reaction would.
+  for (const login in activities) {
+    if (login === currentUser.login) continue;
+    const list = Object.values(activities[login] || {});
+    if (list.some((e) => e.ts > notifSeenAt)) return true;
+  }
+  return false;
+}
+
+function updateNotifBadge() {
+  const dot = $("#notifDot");
+  if (dot) dot.hidden = !hasUnreadNotifications();
+}
+
+// Called when the person taps the bell — clears the yellow marker and
+// remembers the moment, both locally and (in cloud mode) on their own
+// per-team record, so it stays cleared across reloads/devices.
+function markNotificationsSeen() {
+  notifSeenAt = Date.now();
+  updateNotifBadge();
+  if (useCloud && currentUser) db.ref(teamPath(`notifSeen/${currentUser.login}`)).set(notifSeenAt);
+}
+
+// ---------- RECIPES (global — a shared cookbook, not tied to any one team) ----------
+// Lives at the DB root as recipes/{recipeId}, alongside teams/ and users/ —
+// deliberately NOT under teams/{teamId}/..., so it's the same list no
+// matter which team is currently active, and survives switching or leaving
+// teams entirely. "Author" is the Firebase Auth uid (not a per-team login,
+// which only needs to be unique within one team) — see recipeAuthorId.
+
+const RECIPE_CATEGORIES = {
+  breakfast: { label: "Завтрак", pluralLabel: "Завтраки", emoji: "🍳" },
+  lunch:     { label: "Обед",    pluralLabel: "Обеды",    emoji: "🍲" },
+  dinner:    { label: "Ужин",    pluralLabel: "Ужины",    emoji: "🌙" }
+};
+const RECIPE_UNITS = ["г", "мл", "шт"];
+
+// Stable per-account identity for "who wrote this recipe", independent of
+// which team (and therefore which per-team login) happens to be active.
+// Falls back to a fixed key in local demo mode, where there's no real
+// multi-account concept anyway.
+function recipeAuthorId() {
+  return (useCloud && firebase.auth().currentUser) ? firebase.auth().currentUser.uid : "local";
+}
+
+function subscribeToRecipes() {
+  if (!useCloud || !db) return;
+  db.ref("recipes").on("value", (snap) => {
+    recipes = snap.val() || {};
+    if (currentTab === "recipes") renderRecipes();
+  });
+}
+function unsubscribeRecipes() {
+  if (!useCloud || !db) return;
+  db.ref("recipes").off();
+}
+
+// ---- Ingredient rows (dynamic list inside the create/edit form) ----
+
+function createIngredientRow(ing) {
+  const row = document.createElement("div");
+  row.className = "ingredient-row";
+
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.className = "ingredient-name-input modal-input";
+  nameInput.placeholder = "Название";
+  nameInput.value = (ing && ing.name) || "";
+
+  const amountInput = document.createElement("input");
+  amountInput.type = "number";
+  amountInput.className = "ingredient-amount-input modal-input";
+  amountInput.placeholder = "200";
+  amountInput.min = "0";
+  amountInput.value = (ing && ing.amount != null) ? ing.amount : "";
+
+  const unitSelect = document.createElement("select");
+  unitSelect.className = "ingredient-unit-select modal-input";
+  RECIPE_UNITS.forEach((u) => {
+    const opt = document.createElement("option");
+    opt.value = u;
+    opt.textContent = u;
+    if (ing && ing.unit === u) opt.selected = true;
+    unitSelect.appendChild(opt);
+  });
+
+  const delBtn = document.createElement("button");
+  delBtn.type = "button";
+  delBtn.className = "ingredient-row-del";
+  delBtn.title = "Удалить ингредиент";
+  delBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M5 7h14"/>
+      <path d="M9.5 7V5.2A1.2 1.2 0 0 1 10.7 4h2.6a1.2 1.2 0 0 1 1.2 1.2V7"/>
+      <path d="M7 7l.8 12a1.6 1.6 0 0 0 1.6 1.5h5.2a1.6 1.6 0 0 0 1.6-1.5L17 7"/>
+      <path d="M10.3 11v6M13.7 11v6"/>
+    </svg>`;
+  delBtn.addEventListener("click", () => row.remove());
+
+  row.appendChild(nameInput);
+  row.appendChild(amountInput);
+  row.appendChild(unitSelect);
+  row.appendChild(delBtn);
+  return row;
+}
+
+function addIngredientRow(ing) {
+  $("#ingredientRows").appendChild(createIngredientRow(ing));
+}
+
+function readIngredientRows() {
+  return Array.from($("#ingredientRows").querySelectorAll(".ingredient-row"))
+    .map((row) => ({
+      name: row.querySelector(".ingredient-name-input").value.trim(),
+      amount: row.querySelector(".ingredient-amount-input").value.trim(),
+      unit: row.querySelector(".ingredient-unit-select").value
+    }))
+    .filter((ing) => ing.name); // silently drop rows nobody filled in
+}
+
+// ---- Create / edit form ----
+
+// Toggles the enabled/disabled look of the КБЖУ fields based on the
+// "Без КБЖУ" checkbox — shared by both the checkbox's change handler and
+// openRecipeForm (to restore the right state when editing/reopening).
+function applyRecipeMacrosState(noMacros) {
+  $("#recipeMacrosGrid").classList.toggle("disabled", noMacros);
+  ["#recipeCaloriesInput", "#recipeProteinInput", "#recipeFatInput", "#recipeCarbsInput"].forEach((sel) => {
+    $(sel).disabled = noMacros;
+  });
+}
+
+// Pass an existing recipe (with its id attached) to edit it in place, or
+// call with no argument to open a blank form for a new one.
+function openRecipeForm(recipe) {
+  editingRecipeId = recipe ? recipe.id : null;
+  recipeFormCategory = (recipe && recipe.category) || "breakfast";
+  $("#recipeFormTitle").textContent = recipe ? "Изменить рецепт 🍽️" : "Новый рецепт 🍽️";
+  $("#recipeNameInput").value = recipe ? recipe.name : "";
+  const noMacros = !!(recipe && recipe.noMacros);
+  $("#recipeNoMacrosCheckbox").checked = noMacros;
+  $("#recipeCaloriesInput").value = recipe && !noMacros ? recipe.calories : "";
+  $("#recipeProteinInput").value = recipe && !noMacros ? recipe.protein : "";
+  $("#recipeFatInput").value = recipe && !noMacros ? recipe.fat : "";
+  $("#recipeCarbsInput").value = recipe && !noMacros ? recipe.carbs : "";
+  applyRecipeMacrosState(noMacros);
+  $("#recipeCommentInput").value = (recipe && recipe.comment) || "";
+  $("#recipeFormError").hidden = true;
+
+  $("#recipeCategoryFormSegmented").querySelectorAll(".seg-btn").forEach((b) => {
+    b.classList.toggle("active", b.dataset.category === recipeFormCategory);
+  });
+
+  $("#ingredientRows").innerHTML = "";
+  const ingredients = (recipe && recipe.ingredients) || [];
+  if (ingredients.length) ingredients.forEach((ing) => addIngredientRow(ing));
+  else addIngredientRow(); // one blank row to start from, for a brand-new recipe
+
+  openModal("recipeFormModal");
+}
+
+function saveRecipeFromForm() {
+  const name = $("#recipeNameInput").value.trim();
+  const ingredients = readIngredientRows();
+  const noMacros = $("#recipeNoMacrosCheckbox").checked;
+  const calories = parseInt($("#recipeCaloriesInput").value, 10);
+  const protein = parseInt($("#recipeProteinInput").value, 10);
+  const fat = parseInt($("#recipeFatInput").value, 10);
+  const carbs = parseInt($("#recipeCarbsInput").value, 10);
+  const comment = $("#recipeCommentInput").value.trim();
+
+  const macrosValid = noMacros || [calories, protein, fat, carbs].every((n) => Number.isFinite(n) && n >= 0);
+  if (!name || !ingredients.length || !macrosValid) {
+    $("#recipeFormError").hidden = false;
+    return;
+  }
+  $("#recipeFormError").hidden = true;
+
+  const patch = noMacros
+    ? { name, category: recipeFormCategory, ingredients, noMacros: true, calories: null, protein: null, fat: null, carbs: null, comment }
+    : { name, category: recipeFormCategory, ingredients, noMacros: false, calories, protein, fat, carbs, comment };
+
+  if (editingRecipeId) {
+    // Editing never touches authorUid/authorName/createdAt — only the
+    // original author can even reach this path (see openRecipeDetail's
+    // isMine gate on the Редактировать button).
+    if (useCloud) db.ref(`recipes/${editingRecipeId}`).update(patch);
+    else { Object.assign(recipes[editingRecipeId], patch); persistLocal(); renderRecipes(); }
+  } else {
+    const full = { ...patch, authorUid: recipeAuthorId(), authorName: currentUser.name, createdAt: Date.now() };
+    if (useCloud) {
+      db.ref("recipes").push(full);
+    } else {
+      recipes[randomId()] = full;
+      persistLocal();
+      renderRecipes();
+    }
+  }
+
+  closeModal("recipeFormModal");
+  editingRecipeId = null;
+  showToast("🍽️", "Рецепт сохранён!");
+}
+
+// ---- Detail view ----
+
+function openRecipeDetail(id) {
+  const r = recipes[id];
+  if (!r) return;
+  viewingRecipeId = id;
+  const cat = RECIPE_CATEGORIES[r.category] || { label: r.category, emoji: "🍽️" };
+  $("#recipeDetailTitle").textContent = r.name;
+  $("#recipeDetailCategory").textContent = `${cat.emoji} ${cat.label}`;
+  $("#recipeDetailMacros").textContent = r.noMacros
+    ? "Без КБЖУ"
+    : `${nf(r.calories)} ккал · Б ${nf(r.protein)} · Ж ${nf(r.fat)} · У ${nf(r.carbs)}`;
+  const dateLabel = r.createdAt ? new Date(r.createdAt).toLocaleDateString("ru-RU", { day: "numeric", month: "long" }) : "";
+  $("#recipeDetailMeta").textContent = `👤 Создал: ${r.authorName || "—"} · 📅 ${dateLabel}`;
+  $("#recipeDetailIngredients").innerHTML = (r.ingredients || []).map((ing) => `
+    <li class="recipe-ingredient-row">
+      <span class="recipe-ingredient-name">${escapeHtml(ing.name)}</span>
+      <span class="recipe-ingredient-amount">${escapeHtml(String(ing.amount != null ? ing.amount : ""))} ${escapeHtml(ing.unit || "")}</span>
+    </li>`).join("");
+
+  const hasComment = !!(r.comment && r.comment.trim());
+  $("#recipeDetailCommentSection").hidden = !hasComment;
+  if (hasComment) $("#recipeDetailComment").textContent = r.comment;
+
+  const isMine = r.authorUid === recipeAuthorId();
+  $("#editRecipeBtn").hidden = !isMine;
+  $("#deleteRecipeBtn").hidden = !isMine;
+
+  openModal("recipeDetailModal");
+}
+
+function deleteRecipe(id) {
+  if (useCloud) db.ref(`recipes/${id}`).remove();
+  else { delete recipes[id]; persistLocal(); renderRecipes(); }
+}
+
+// ---- List / journal ----
+
+function matchesRecipeFilters(r) {
+  if (recipeCategoryFilter !== "all" && r.category !== recipeCategoryFilter) return false;
+  if (recipeMineOnly && r.authorUid !== recipeAuthorId()) return false;
+  const q = recipeSearchQuery.trim().toLowerCase();
+  if (q && !(r.name || "").toLowerCase().includes(q)) return false;
+  return true;
+}
+
+function renderRecipes() {
+  const wrap = $("#recipeList");
+  const empty = $("#recipeEmpty");
+  if (!wrap) return;
+  const entries = Object.entries(recipes || {})
+    .filter(([, r]) => matchesRecipeFilters(r))
+    .sort((a, b) => (b[1].createdAt || 0) - (a[1].createdAt || 0));
+
+  if (!entries.length) {
+    wrap.innerHTML = "";
+    if (empty) empty.hidden = false;
+    return;
+  }
+  if (empty) empty.hidden = true;
+
+  wrap.innerHTML = entries.map(([id, r]) => {
+    const cat = RECIPE_CATEGORIES[r.category] || { label: r.category, emoji: "🍽️" };
+    const dateLabel = r.createdAt ? new Date(r.createdAt).toLocaleDateString("ru-RU", { day: "numeric", month: "long" }) : "";
+    const count = (r.ingredients || []).length;
+    return `<li class="recipe-card" data-id="${id}">
+      <div class="recipe-card-head">
+        <span class="recipe-card-title">${escapeHtml(r.name)}</span>
+        <span class="recipe-card-category">${cat.emoji} ${cat.label}</span>
+      </div>
+      <div class="recipe-card-macros">${r.noMacros ? "Без КБЖУ" : `${nf(r.calories)} ккал · Б ${nf(r.protein)} · Ж ${nf(r.fat)} · У ${nf(r.carbs)}`}</div>
+      <div class="recipe-card-meta">👤 ${escapeHtml(r.authorName || "—")} · 📅 ${dateLabel} · ${count} ${pluralRu(count, "ингредиент", "ингредиента", "ингредиентов")}</div>
+    </li>`;
+  }).join("");
+}
+
 // ---------- RENDER: FEED ----------
 function buildFeed() {
   const items = [];
@@ -1738,8 +2254,13 @@ function toggleReaction(itemId, emoji) {
     delete reactions[itemId][emoji][currentUser.login];
     if (useCloud) db.ref(teamPath(`reactions/${itemId}/${emoji}/${currentUser.login}`)).remove();
   } else {
-    reactions[itemId][emoji][currentUser.login] = true;
-    if (useCloud) db.ref(teamPath(`reactions/${itemId}/${emoji}/${currentUser.login}`)).set(true);
+    // Stored as a timestamp rather than a bare `true` — every place that
+    // reads this only checks truthiness or takes Object.keys() (unaffected
+    // by the value itself), so this is a safe extension. The timestamp is
+    // what lets the notifications bell tell a fresh reaction from an old one.
+    const ts = Date.now();
+    reactions[itemId][emoji][currentUser.login] = ts;
+    if (useCloud) db.ref(teamPath(`reactions/${itemId}/${emoji}/${currentUser.login}`)).set(ts);
   }
   if (Object.keys(reactions[itemId][emoji]).length === 0) delete reactions[itemId][emoji];
   if (!useCloud) persistLocal();
@@ -1872,12 +2393,15 @@ function renderProfile() {
   const badge = $("#syncBadge");
   badge.textContent = useCloud ? "☁️ синхронизировано со всеми" : "📱 только на этом устройстве";
   badge.classList.toggle("cloud", useCloud);
-  const t = computeTotals(currentUser.login);
-  const s = computeStreak(currentUser.login);
-  $("#statTotalSteps").textContent = nf(t.totalSteps);
-  $("#statWorkouts").textContent = t.totalWorkouts;
-  $("#statBestStreak").textContent = s.best;
-  $("#statPoints").textContent = nf(t.points);
+  // Lifetime, not team-scoped — these numbers belong to the person, so they
+  // must not drop back to zero just because they switched teams or left one
+  // (see computeLifetimeStats).
+  const lifetime = computeLifetimeStats(currentUser.login);
+  $("#statTotalSteps").textContent = nf(lifetime.totalSteps);
+  $("#statWorkouts").textContent = lifetime.totalWorkouts;
+  $("#statBestStreak").textContent = lifetime.bestStreak;
+  $("#statPoints").textContent = nf(lifetime.points);
+  renderAchievements(); // now lives in Профиль as a collapsible card, not its own tab
   renderTripHistory();
 }
 
@@ -1924,9 +2448,9 @@ function renderTripHistory() {
       .join("");
     return `<li class="trip-history-entry">
       <div class="trip-history-entry-head">
-        <span class="trip-history-entry-emoji">🏁</span>
+        <span class="trip-history-entry-emoji">${h.leftEarly ? "🚪" : "🏁"}</span>
         <div>
-          <div class="trip-history-entry-title">${h.name || "Поездка"}</div>
+          <div class="trip-history-entry-title">${h.name || "Поездка"}${h.leftEarly ? '<span class="trip-history-entry-tag">покинуто</span>' : ""}</div>
           ${dateLabel ? `<div class="trip-history-entry-date">${dateLabel}</div>` : ""}
         </div>
       </div>
@@ -1992,8 +2516,8 @@ function switchTab(tab) {
   if (tab === "home") renderHome();
   if (tab === "feed") renderFeed();
   if (tab === "team") renderTeam();
-  if (tab === "ach") renderAchievements();
-  if (tab === "profile") renderProfile();
+  if (tab === "recipes") renderRecipes();
+  if (tab === "profile") renderProfile(); // also renders the Награды card inside it — see renderProfile
 }
 
 // ---------- APP BOOT ----------
@@ -2119,8 +2643,14 @@ function wireEvents() {
     setAuthMode("login");
   });
 
-  $("#logoutBtn").addEventListener("click", logout);
+  // Signing out only lives in Профиль now — the home header's icon is the
+  // notifications bell instead (see #notifBtn below).
   $("#logoutBtn2").addEventListener("click", logout);
+
+  $("#notifBtn").addEventListener("click", () => {
+    switchTab("feed");
+    markNotificationsSeen();
+  });
 
   $("#copyInviteBtn").addEventListener("click", async () => {
     const code = activeTeamMeta.inviteCode;
@@ -2213,7 +2743,7 @@ function wireEvents() {
   });
 
   document.querySelectorAll("[data-close]").forEach((btn) => {
-    btn.addEventListener("click", () => { closeModal(btn.dataset.close); editingEntryId = null; });
+    btn.addEventListener("click", () => { closeModal(btn.dataset.close); editingEntryId = null; editingRecipeId = null; });
   });
 
   $("#saveStepsBtn").addEventListener("click", () => {
@@ -2246,7 +2776,7 @@ function wireEvents() {
   });
 
   document.querySelectorAll(".modal-backdrop").forEach((mb) => {
-    mb.addEventListener("click", (e) => { if (e.target === mb) { mb.hidden = true; editingEntryId = null; } });
+    mb.addEventListener("click", (e) => { if (e.target === mb) { mb.hidden = true; editingEntryId = null; editingRecipeId = null; } });
   });
 
   $("#historyList").addEventListener("click", (e) => {
@@ -2301,6 +2831,70 @@ function wireEvents() {
     const willOpen = body.hidden;
     body.hidden = !willOpen;
     chevron.classList.toggle("open", willOpen);
+  });
+
+  $("#teamCardToggle").addEventListener("click", () => {
+    const body = $("#teamCardBody");
+    const chevron = $("#teamCardChevron");
+    const willOpen = body.hidden;
+    body.hidden = !willOpen;
+    chevron.classList.toggle("open", willOpen);
+  });
+
+  $("#achToggle").addEventListener("click", () => {
+    const body = $("#achBody");
+    const chevron = $("#achChevron");
+    const willOpen = body.hidden;
+    body.hidden = !willOpen;
+    chevron.classList.toggle("open", willOpen);
+  });
+
+  // ---- Recipes ----
+  $("#addRecipeBtn").addEventListener("click", () => openRecipeForm());
+
+  $("#recipeSearchInput").addEventListener("input", (e) => {
+    recipeSearchQuery = e.target.value;
+    renderRecipes();
+  });
+
+  wireSegmented("#recipeCategorySegmented", "category", (val) => {
+    recipeCategoryFilter = val;
+    renderRecipes();
+  });
+
+  $("#recipeMineChip").addEventListener("click", () => {
+    recipeMineOnly = !recipeMineOnly;
+    $("#recipeMineChip").classList.toggle("active", recipeMineOnly);
+    renderRecipes();
+  });
+
+  wireSegmented("#recipeCategoryFormSegmented", "category", (val) => { recipeFormCategory = val; });
+
+  $("#addIngredientBtn").addEventListener("click", () => addIngredientRow());
+
+  $("#recipeNoMacrosCheckbox").addEventListener("change", (e) => applyRecipeMacrosState(e.target.checked));
+
+  $("#saveRecipeBtn").addEventListener("click", saveRecipeFromForm);
+
+  $("#recipeList").addEventListener("click", (e) => {
+    const card = e.target.closest(".recipe-card");
+    if (!card) return;
+    openRecipeDetail(card.dataset.id);
+  });
+
+  $("#editRecipeBtn").addEventListener("click", () => {
+    const r = recipes[viewingRecipeId];
+    if (!r) return;
+    closeModal("recipeDetailModal");
+    openRecipeForm({ ...r, id: viewingRecipeId });
+  });
+
+  $("#deleteRecipeBtn").addEventListener("click", () => {
+    if (!viewingRecipeId) return;
+    if (!window.confirm("Удалить этот рецепт без возможности восстановления?")) return;
+    deleteRecipe(viewingRecipeId);
+    closeModal("recipeDetailModal");
+    showToast("🗑️", "Рецепт удалён");
   });
 
   function updateAvatarPreview() {
