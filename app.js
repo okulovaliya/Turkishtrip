@@ -30,7 +30,15 @@
        summary/{login} — { name, totalSteps, totalWorkoutMinutes, points, bestStreak }
                           at the moment the goal closed (all-time totals —
                           activities themselves are never reset/archived)
-     activities/{login}/{entryId}   — unchanged shape from before
+     activities/{login}/{entryId}   — unchanged shape from before, except:
+       if the account belongs to more than one team, every entry is also
+       written as a full independent copy into every OTHER team's own
+       activities/{theirLogin}/{entryId} — same id everywhere, so a later
+       edit/delete can find and update every copy (see CROSS-TEAM ACTIVITY
+       SYNC below / mirrorEntryToOtherTeams / removeEntryFromOtherTeams).
+       Each team still just sums whatever is in its own activities node,
+       so a mirrored entry counts toward that team's goal exactly like one
+       logged there directly — nothing else needed to change.
      comments/{activityId}/{commentId}
      reactions/{activityId}/{emoji}/{login}: ms timestamp (was a bare `true`
        before the notifications bell — every reader only checks truthiness
@@ -339,6 +347,7 @@ function pointsForSteps(steps) { return Math.round(steps / 100); }
 const WORKOUT_POINT_RATES = {
   "Кардио": 3,
   "Плавание": 3,
+  "Велосипед": 3,
   "Силовая": 2.5,
   "Танцы": 2,
   "Прогулка": 1.5,
@@ -354,6 +363,7 @@ function pointsForWorkout(min, type) {
 const WORKOUT_INTENSITY = {
   "Кардио": "vigorous",
   "Плавание": "vigorous",
+  "Велосипед": "vigorous",
   "Силовая": "moderate",
   "Танцы": "moderate",
   "Прогулка": "moderate",
@@ -1586,7 +1596,7 @@ function updateStepsEntry(id, steps, date) {
   entry.steps = steps;
   entry.points = pointsForSteps(steps);
   entry.date = date || entry.date;
-  if (useCloud) db.ref(teamPath(`activities/${currentUser.login}/${id}`)).update({ steps: entry.steps, points: entry.points, date: entry.date });
+  if (useCloud) { db.ref(teamPath(`activities/${currentUser.login}/${id}`)).update({ steps: entry.steps, points: entry.points, date: entry.date }); mirrorEntryToOtherTeams(id, entry); }
   else persistLocal();
   showToast("✏️", "Запись обновлена!");
   renderHome();
@@ -1608,6 +1618,7 @@ function updateWorkoutEntry(id, type, minutes, calories, date) {
       points: entry.points,
       date: entry.date
     });
+    mirrorEntryToOtherTeams(id, entry);
   } else {
     persistLocal();
   }
@@ -1624,6 +1635,7 @@ function deleteEntry(id) {
     db.ref(teamPath(`activities/${currentUser.login}/${id}`)).remove();
     db.ref(teamPath(`comments/${id}`)).remove();
     db.ref(teamPath(`reactions/${id}`)).remove();
+    removeEntryFromOtherTeams(id);
   } else {
     persistLocal();
   }
@@ -2466,7 +2478,7 @@ function addStepsEntry(steps, date) {
   const entry = { id, date: date || getTodayStr(), type: "steps", steps, points: pointsForSteps(steps), ts: Date.now() };
   if (!activities[currentUser.login]) activities[currentUser.login] = {};
   activities[currentUser.login][id] = entry;
-  if (useCloud) db.ref(teamPath(`activities/${currentUser.login}/${id}`)).set(entry);
+  if (useCloud) { db.ref(teamPath(`activities/${currentUser.login}/${id}`)).set(entry); mirrorEntryToOtherTeams(id, entry); }
   else persistLocal();
   afterAdd("steps", before);
 }
@@ -2476,7 +2488,7 @@ function addWorkoutEntry(type, minutes, calories, date) {
   const entry = { id, date: date || getTodayStr(), type: "workout", workoutType: type, workoutMinutes: minutes, workoutCalories: calories || null, points: pointsForWorkout(minutes, type), ts: Date.now() };
   if (!activities[currentUser.login]) activities[currentUser.login] = {};
   activities[currentUser.login][id] = entry;
-  if (useCloud) db.ref(teamPath(`activities/${currentUser.login}/${id}`)).set(entry);
+  if (useCloud) { db.ref(teamPath(`activities/${currentUser.login}/${id}`)).set(entry); mirrorEntryToOtherTeams(id, entry); }
   else persistLocal();
   afterAdd("workout", before);
 }
@@ -2491,6 +2503,53 @@ function afterAdd(kind, beforeUnlocked) {
     showToast(kind === "steps" ? "🚶" : "🏋️", msg);
   }
   renderHome();
+}
+
+// ---------- CROSS-TEAM ACTIVITY SYNC ----------
+// If the signed-in account belongs to more than one team, a single steps/
+// workout entry logged while one team is active should count toward every
+// team's goal, not just the currently open one — so it's mirrored as a
+// full independent copy into each OTHER team's activities/{login}/{id}
+// node. The entry id (randomId(), timestamp + random suffix) is reused as
+// the key everywhere it's mirrored, which is what lets a later edit or
+// delete find and update every copy by that same id, keeping all of them
+// in sync. Each team still computes its own totals/points/streak the
+// normal way (summing whatever is in its own activities node) — nothing
+// else needs to change for a mirrored entry to count correctly there.
+// Cloud-only: local demo mode has no concept of "other teams".
+async function otherTeamMemberships() {
+  if (!useCloud || !firebase.auth().currentUser) return [];
+  const uid = firebase.auth().currentUser.uid;
+  const snap = await db.ref(`users/${uid}/memberships`).once("value");
+  const memberships = snap.val() || {};
+  return Object.keys(memberships)
+    .filter((tid) => tid !== activeTeamId && memberships[tid] && memberships[tid].login)
+    .map((tid) => ({ teamId: tid, login: memberships[tid].login }));
+}
+
+// Writes the full entry object (as-is) into every other team the account
+// belongs to — used for both creating a new entry and saving edits to an
+// existing one, since either way every copy should end up identical.
+async function mirrorEntryToOtherTeams(id, entry) {
+  const others = await otherTeamMemberships();
+  if (!others.length) return;
+  const updates = {};
+  others.forEach(({ teamId, login }) => { updates[`teams/${teamId}/activities/${login}/${id}`] = entry; });
+  await db.ref().update(updates);
+}
+
+// Removes the entry (and any comments/reactions left on it) from every
+// other team's copy, mirroring a delete the same way creates/edits are.
+async function removeEntryFromOtherTeams(id) {
+  const others = await otherTeamMemberships();
+  if (!others.length) return;
+  const updates = {};
+  others.forEach(({ teamId, login }) => {
+    updates[`teams/${teamId}/activities/${login}/${id}`] = null;
+    updates[`teams/${teamId}/comments/${id}`] = null;
+    updates[`teams/${teamId}/reactions/${id}`] = null;
+  });
+  await db.ref().update(updates);
 }
 
 function showToast(emoji, text) {
