@@ -27,9 +27,11 @@
        joinedAt     — ms timestamp
      history/{cycleId}   — frozen snapshot written once per closed goal:
        name, destination, tripDate, startedAt, closedAt,
-       summary/{login} — { name, totalSteps, totalWorkoutMinutes, points, bestStreak }
-                          at the moment the goal closed (all-time totals —
-                          activities themselves are never reset/archived)
+       summary/{login} — { name, totalSteps, totalWorkouts, totalWorkoutMinutes,
+                          points, bestStreak, maxDaySteps, entryCount } at the
+                          moment the goal closed (all-time totals — activities
+                          themselves are never reset/archived). Same shape is
+                          used by users/{uid}/completedGoals — see below.
      activities/{login}/{entryId}   — unchanged shape from before, except:
        if the account belongs to more than one team, every entry is also
        written as a full independent copy into every OTHER team's own
@@ -68,15 +70,24 @@
          archiveTeamHistoryToPersonalRecord (kept live while a member) and
          leaveTeam (one last catch-up pass on the way out). "Завершённые
          цели" in Profile renders from this, not from the active team's
-         history, so it doesn't change when switching teams.
+         history, so it doesn't change when switching teams. Only covers
+         teams no longer actively joined (or whose goal already closed) —
+         for teams still actively joined, computeLifetimeStats reads live
+         totals instead (see otherTeamsLiveStats/refreshOtherTeamsLiveStats),
+         since there's no snapshot yet for an ongoing membership.
      inviteCodes/{code}: teamId
        — short-code lookup used by the "join a team" screen.
      users/{uid}/profile — { name, avatar, avatarGradient, dailyGoal }
        — mirror of whatever this account last saved in ANY team's profiles/
-         node (see saveProfile). Used only as a seed for teams/{teamId}/
-         profiles/{login} when creating/joining a *new* team (see
-         seedTeamProfile), so a returning person doesn't start a fresh team
-         with a blank name/avatar — not read anywhere else.
+         node (see saveProfile). Used as a seed for teams/{teamId}/profiles/
+         {login} when creating/joining a *new* team (see seedTeamProfile),
+         so a returning person doesn't start a fresh team with a blank
+         name/avatar. If this is still empty/incomplete (e.g. saveProfile
+         was never called since this mirror was introduced), seedTeamProfile
+         falls back to whatever's currently on screen instead (see
+         currentUserFallbackProfile) and backfillAccountProfileUpdates fills
+         this node in at the same time, so the gap only ever needs papering
+         over once per account.
      recipes/{recipeId} — { name, category, ingredients, calories, protein,
        fat, carbs, comment, authorUid, authorName, createdAt, noMacros }
        — a single shared "cookbook" for the whole app, deliberately NOT
@@ -293,6 +304,7 @@ let teamChartMetric = "steps";
 let teamChartPeriod = "day";
 let notifSeenAt = 0; // ms timestamp — comments/reactions on my own activity older than this don't light up the bell
 let notifSeenListenerLogin = null; // which login's notifSeen node is currently listened to, for detachTeamListeners
+let otherTeamsLiveStats = {}; // teamId -> summarizeActivityEntries() result, for every OTHER team this account is still an active member of (see refreshOtherTeamsLiveStats) — feeds computeLifetimeStats/computeAchievements so they don't drop back to zero just because a different team happens to be open right now
 let recipes = {}; // recipeId -> recipe — GLOBAL, not team-scoped (see subscribeToRecipes); same for every team/account
 let recipeSearchQuery = "";
 let recipeCategoryFilter = "all"; // "all" | "breakfast" | "lunch" | "dinner" — Журнал tab filter
@@ -542,9 +554,42 @@ async function uniqueLoginForTeam(teamId, name) {
 // (users/{uid}/profile — avatar, gradient, daily goal, name), so a returning
 // person's next team doesn't start them off blank, but still lets the name
 // typed/carried into *this* join/create action win if there's one to use.
-function seedTeamProfile(accountProfile, displayName) {
-  const name = displayName || (accountProfile && accountProfile.name) || "Без имени";
-  return accountProfile ? { ...accountProfile, name } : { name };
+// fallbackProfile is whatever profile they're CURRENTLY showing (their old
+// team's own profiles/{login}, via currentUser at the call site) — used to
+// fill in avatar/gradient/dailyGoal when users/{uid}/profile is still empty
+// or incomplete, which happens for anyone who joined a second team before
+// ever explicitly re-saving their profile through "Изменить профиль" after
+// that account-level mirror was introduced. Without this fallback their
+// avatar/gradient would silently reset to the app default in the new team.
+function seedTeamProfile(accountProfile, displayName, fallbackProfile) {
+  const merged = { ...(fallbackProfile || {}), ...(accountProfile || {}) };
+  const name = displayName || merged.name || "Без имени";
+  return Object.keys(merged).length ? { ...merged, name } : { name };
+}
+
+// Whatever profile is on screen right now (the team someone's switching
+// AWAY from, if any) — the fallback source seedTeamProfile falls back to
+// when users/{uid}/profile is still empty/incomplete. null for a genuinely
+// first-ever team, where there's nothing to inherit anyway.
+function currentUserFallbackProfile() {
+  if (!currentUser) return null;
+  return { name: currentUser.name, avatar: currentUser.avatar, avatarGradient: currentUser.avatarGradient, dailyGoal: currentUser.dailyGoal };
+}
+
+// If users/{uid}/profile was missing avatar/gradient/dailyGoal (the gap
+// seedTeamProfile's fallback just papered over), backfill it from what we
+// just seeded so the NEXT team join doesn't need the fallback again. Only
+// fills in what's missing — never overwrites anything already saved there.
+function backfillAccountProfileUpdates(uid, accountProfile, seededProfile) {
+  if (accountProfile && accountProfile.avatar) return {};
+  const updates = {};
+  updates[`users/${uid}/profile`] = {
+    ...(accountProfile || {}),
+    avatar: seededProfile.avatar,
+    avatarGradient: seededProfile.avatarGradient,
+    dailyGoal: seededProfile.dailyGoal
+  };
+  return updates;
 }
 
 // Creates a brand-new team, makes uid its first member/owner, and returns
@@ -554,7 +599,8 @@ async function createTeam(uid, teamName, tripDateStr, displayName, destination) 
   const login = await uniqueLoginForTeam(teamId, displayName);
   const inviteCode = randomCode(6);
   const accountProfile = (await db.ref(`users/${uid}/profile`).once("value")).val();
-  const updates = {};
+  const seededProfile = seedTeamProfile(accountProfile, displayName, currentUserFallbackProfile());
+  const updates = { ...backfillAccountProfileUpdates(uid, accountProfile, seededProfile) };
   updates[`teams/${teamId}/meta`] = {
     name: teamName,
     destination: destination || "цели",
@@ -565,7 +611,7 @@ async function createTeam(uid, teamName, tripDateStr, displayName, destination) 
     migrated: true // brand-new team — nothing legacy to migrate
   };
   updates[`teams/${teamId}/members/${login}`] = { role: "owner", joinedAt: Date.now() };
-  updates[`teams/${teamId}/profiles/${login}`] = seedTeamProfile(accountProfile, displayName);
+  updates[`teams/${teamId}/profiles/${login}`] = seededProfile;
   updates[`inviteCodes/${inviteCode}`] = teamId;
   updates[`users/${uid}/memberships/${teamId}`] = { login };
   await db.ref().update(updates);
@@ -581,9 +627,10 @@ async function joinTeamByCode(uid, codeRaw, displayName) {
   if (!teamId) return { error: "Такой код не найден. Проверьте и попробуйте ещё раз." };
   const login = await uniqueLoginForTeam(teamId, displayName);
   const accountProfile = (await db.ref(`users/${uid}/profile`).once("value")).val();
-  const updates = {};
+  const seededProfile = seedTeamProfile(accountProfile, displayName, currentUserFallbackProfile());
+  const updates = { ...backfillAccountProfileUpdates(uid, accountProfile, seededProfile) };
   updates[`teams/${teamId}/members/${login}`] = { role: "member", joinedAt: Date.now() };
-  updates[`teams/${teamId}/profiles/${login}`] = seedTeamProfile(accountProfile, displayName);
+  updates[`teams/${teamId}/profiles/${login}`] = seededProfile;
   updates[`users/${uid}/memberships/${teamId}`] = { login };
   await db.ref().update(updates);
   return { teamId, login };
@@ -962,9 +1009,15 @@ function computeTeamTotals() {
   return { totalSteps, totalPoints, totalWorkouts, todaySteps };
 }
 
+// Achievements are lifetime/account-level too (same reasoning as
+// computeLifetimeStats, which this is built from) — team_spirit and
+// almost_there are the two exceptions, since "300k steps as a team" and
+// "days until the trip" are inherently about the currently active team,
+// not a personal lifetime figure.
 function computeAchievements(login) {
-  const totals = computeTotals(login);
-  const streak = computeStreak(login);
+  const lifetime = computeLifetimeStats(login);
+  const totals = { totalSteps: lifetime.totalSteps, totalWorkouts: lifetime.totalWorkouts, totalWorkoutMinutes: lifetime.totalWorkoutMinutes, points: lifetime.points, maxDaySteps: lifetime.maxDaySteps, entryCount: lifetime.entryCount };
+  const streak = { best: lifetime.bestStreak };
   const teamTotals = computeTeamTotals();
   const daysLeft = computeDaysLeft();
   const ctx = { totals, streak, teamTotals, daysLeft };
@@ -980,13 +1033,15 @@ function summarizeActivityEntries(entriesObj) {
   const list = Object.values(entriesObj || {});
   let totalSteps = 0, totalWorkouts = 0, totalWorkoutMinutes = 0, points = 0;
   const byDate = {};
+  const stepsByDate = {};
   list.forEach((e) => {
     points += e.points || 0;
-    if (e.type === "steps") totalSteps += e.steps;
+    if (e.type === "steps") { totalSteps += e.steps; stepsByDate[e.date] = (stepsByDate[e.date] || 0) + e.steps; }
     if (e.type === "workout") { totalWorkouts += 1; totalWorkoutMinutes += e.workoutMinutes; }
     const add = (e.type === "steps" ? e.steps : 0) + (e.type === "workout" ? e.workoutMinutes : 0);
     byDate[e.date] = (byDate[e.date] || 0) + add;
   });
+  const maxDaySteps = Object.values(stepsByDate).reduce((m, v) => Math.max(m, v), 0);
   const activeDates = Object.keys(byDate).filter((d) => byDate[d] > 0).sort();
   let best = 0, run = 0, prev = null;
   activeDates.forEach((ds) => {
@@ -995,7 +1050,7 @@ function summarizeActivityEntries(entriesObj) {
     if (run > best) best = run;
     prev = d;
   });
-  return { totalSteps, totalWorkouts, totalWorkoutMinutes, points, bestStreak: best, entryCount: list.length };
+  return { totalSteps, totalWorkouts, totalWorkoutMinutes, points, bestStreak: best, entryCount: list.length, maxDaySteps };
 }
 
 // ---------- GOAL LIFECYCLE (close current goal → history → start new one) ----------
@@ -1016,29 +1071,41 @@ function computeGoalSummary() {
       totalWorkouts: totals.totalWorkouts,
       totalWorkoutMinutes: totals.totalWorkoutMinutes,
       points: totals.points,
-      bestStreak: streak.best
+      bestStreak: streak.best,
+      maxDaySteps: totals.maxDaySteps,
+      entryCount: totals.entryCount
     };
   });
   return summary;
 }
 
-// "Профиль" shows steps/workouts/points/streak as belonging to the PERSON,
-// not to whichever team happens to be open right now — switching teams (or
-// having left one) must never make these drop back to zero. Combines the
-// currently active team's live totals (computeTotals/computeStreak already
-// reflect that team's *entire* history, since activities are never reset —
-// see computeGoalSummary's comment above) with the latest known snapshot of
-// every OTHER team this account has ever been part of, from personalGoals.
-// Those snapshots are "cumulative total at that moment", not per-cycle
-// deltas (same reason as above), so only the single most recent one per
-// team is used — adding every snapshot for the same team would double-count.
+// "Профиль" (and the Награды achievements computed from it — see
+// computeAchievements) shows steps/workouts/points/streak as belonging to
+// the PERSON, not to whichever team happens to be open right now —
+// switching teams, joining an additional one, or having left one must
+// never make these drop back to zero. Combines three sources:
+//   1. the currently active team's live totals (computeTotals/computeStreak
+//      already reflect that team's *entire* history, since activities are
+//      never reset — see computeGoalSummary's comment above)
+//   2. every OTHER team this account is STILL an active member of, from
+//      otherTeamsLiveStats (refreshOtherTeamsLiveStats) — this is what
+//      keeps things like streak/awards from looking reset right after
+//      joining a second team while the first one is still ongoing
+//   3. the latest known snapshot of every team this account HAS LEFT (or
+//      whose goal closed), from personalGoals — snapshots are "cumulative
+//      total at that moment", not per-cycle deltas, so only the single
+//      most recent one per team is used (adding every snapshot for the
+//      same team would double-count), and any team already covered by #2
+//      is skipped here (its live totals are a superset of any snapshot).
 function computeLifetimeStats(login) {
   const live = computeTotals(login);
   const liveStreak = computeStreak(login);
+  const stillActiveTeamIds = new Set(Object.keys(otherTeamsLiveStats));
 
   const latestByTeam = {};
   Object.values(personalGoals || {}).forEach((h) => {
     if (h.teamId === activeTeamId) return; // superseded by the live totals above
+    if (stillActiveTeamIds.has(h.teamId)) return; // superseded by otherTeamsLiveStats below
     const s = h.summary && h.summary[h.myLogin];
     if (!s) return;
     const existing = latestByTeam[h.teamId];
@@ -1052,15 +1119,22 @@ function computeLifetimeStats(login) {
   let totalWorkoutMinutes = live.totalWorkoutMinutes;
   let points = live.points;
   let bestStreak = liveStreak.best;
-  Object.values(latestByTeam).forEach((s) => {
+  let maxDaySteps = live.maxDaySteps;
+  let entryCount = live.entryCount;
+
+  const addSource = (s) => {
     totalSteps += s.totalSteps || 0;
     totalWorkouts += s.totalWorkouts || 0; // 0 for entries frozen before this field existed
     totalWorkoutMinutes += s.totalWorkoutMinutes || 0;
     points += s.points || 0;
     if ((s.bestStreak || 0) > bestStreak) bestStreak = s.bestStreak;
-  });
+    if ((s.maxDaySteps || 0) > maxDaySteps) maxDaySteps = s.maxDaySteps || 0;
+    entryCount += s.entryCount || 0; // 0 for snapshots frozen before this field existed
+  };
+  Object.values(latestByTeam).forEach(addSource);
+  Object.values(otherTeamsLiveStats).forEach(addSource);
 
-  return { totalSteps, totalWorkouts, totalWorkoutMinutes, points, bestStreak };
+  return { totalSteps, totalWorkouts, totalWorkoutMinutes, points, bestStreak, maxDaySteps, entryCount };
 }
 
 // Called after every meta load/update — cheap no-op unless the trip date has
@@ -1303,6 +1377,11 @@ async function activateTeam(teamId, login) {
   await subscribeToActiveTeam();
   pendingAuth = null;
   showApp();
+  // Fire-and-forget: picks up live totals for every OTHER team this
+  // account is still in (see refreshOtherTeamsLiveStats), then re-renders
+  // Профиль if that's what's on screen once the fetch resolves — avoids
+  // blocking the team switch itself on this.
+  refreshOtherTeamsLiveStats().then(() => { if (currentTab === "profile") renderProfile(); });
 }
 
 // Jumps to a team the account already belongs to (team switcher). Looks up
@@ -1393,7 +1472,9 @@ async function leaveTeam(teamId) {
             totalWorkouts: snap.totalWorkouts,
             totalWorkoutMinutes: snap.totalWorkoutMinutes,
             points: snap.points,
-            bestStreak: snap.bestStreak
+            bestStreak: snap.bestStreak,
+            maxDaySteps: snap.maxDaySteps,
+            entryCount: snap.entryCount
           }
         },
         teamId,
@@ -2552,6 +2633,28 @@ async function removeEntryFromOtherTeams(id) {
   await db.ref().update(updates);
 }
 
+// Refreshes otherTeamsLiveStats: for every OTHER team this account is
+// still an active member of (still-open memberships, not left/closed
+// ones — those are covered separately by the personalGoals snapshots),
+// does a one-time read of that team's own activities/{login} and summarizes
+// it exactly like a live totals computation would. Not a permanent
+// listener (that would mean subscribing to every team someone's ever
+// joined, all the time) — called after entering/switching teams and when
+// opening the Профиль tab, which is frequent enough to stay accurate
+// without the overhead. See computeLifetimeStats for how this is combined
+// with the active team's own live totals and other teams' closed snapshots.
+async function refreshOtherTeamsLiveStats() {
+  const others = await otherTeamMemberships();
+  if (!others.length) { otherTeamsLiveStats = {}; return; }
+  const entries = await Promise.all(others.map(async ({ teamId, login }) => {
+    const snap = await db.ref(`teams/${teamId}/activities/${login}`).once("value");
+    return [teamId, summarizeActivityEntries(snap.val())];
+  }));
+  const next = {};
+  entries.forEach(([teamId, stats]) => { next[teamId] = stats; });
+  otherTeamsLiveStats = next;
+}
+
 function showToast(emoji, text) {
   const t = $("#toast");
   $("#toastEmoji").textContent = emoji;
@@ -2576,7 +2679,13 @@ function switchTab(tab) {
   if (tab === "feed") renderFeed();
   if (tab === "team") renderTeam();
   if (tab === "recipes") renderRecipes();
-  if (tab === "profile") renderProfile(); // also renders the Награды card inside it — see renderProfile
+  if (tab === "profile") {
+    renderProfile(); // also renders the Награды card inside it — see renderProfile
+    // Refresh other-teams live totals on the way in too (not just on team
+    // switch), so numbers stay fresh if activity was logged elsewhere
+    // since the last refresh; re-render once resolved.
+    refreshOtherTeamsLiveStats().then(() => { if (currentTab === "profile") renderProfile(); });
+  }
 }
 
 // ---------- APP BOOT ----------
