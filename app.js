@@ -28,7 +28,9 @@
      history/{cycleId}   — frozen snapshot written once per closed goal:
        name, destination, tripDate, startedAt, closedAt,
        summary/{login} — { name, totalSteps, totalWorkouts, totalWorkoutMinutes,
-                          points, bestStreak, maxDaySteps, entryCount } at the
+                          points, bestStreak, maxDaySteps, maxWorkoutMinutes,
+                          workoutTypesUsed, maxWorkoutMinutesByType,
+                          entryCount } at the
                           moment the goal closed (all-time totals — activities
                           themselves are never reset/archived). Same shape is
                           used by users/{uid}/completedGoals — see below.
@@ -75,6 +77,12 @@
          for teams still actively joined, computeLifetimeStats reads live
          totals instead (see otherTeamsLiveStats/refreshOtherTeamsLiveStats),
          since there's no snapshot yet for an ongoing membership.
+         hidden: true — set by hidePersonalGoal() when the person just
+         doesn't want to see that card in the list anymore (e.g. a team they
+         left). Soft-hide only: renderTripHistory() filters it out, but
+         computeLifetimeStats deliberately does NOT check this flag, so
+         lifetime steps/streak/points/achievements earned in that goal are
+         never affected by hiding it.
      inviteCodes/{code}: teamId
        — short-code lookup used by the "join a team" screen.
      users/{uid}/profile — { name, avatar, avatarGradient, dailyGoal }
@@ -273,8 +281,64 @@ const ACHIEVEMENTS = [
   { id: "team_spirit", emoji: "🤝", name: "Командный дух", desc: "300 000 шагов всей командой",
     check: (c) => c.teamTotals.totalSteps >= 300000 },
   { id: "almost_there", emoji: "🛫", name: "Почти там!", desc: "7 дней до поездки или меньше",
-    check: (c) => c.daysLeft <= 7 && c.daysLeft >= 0 }
+    check: (c) => c.daysLeft <= 7 && c.daysLeft >= 0 },
+  { id: "streak14", emoji: "⚡", name: "Две недели без сбоев", desc: "14 дней подряд с активностью",
+    check: (c) => c.streak.best >= 14 },
+  { id: "streak20", emoji: "💪", name: "20 дней ударного режима", desc: "20 дней подряд с активностью",
+    check: (c) => c.streak.best >= 20 },
+  { id: "streak30", emoji: "👑", name: "Железный месяц", desc: "30 дней подряд с активностью",
+    check: (c) => c.streak.best >= 30 },
+  { id: "club20k", emoji: "🚶", name: "20 000 за день", desc: "20 000+ шагов за один день",
+    check: (c) => c.totals.maxDaySteps >= 20000 },
+  { id: "club500k", emoji: "🌍", name: "Полмиллиона", desc: "500 000 шагов с начала челленджа",
+    check: (c) => c.totals.totalSteps >= 500000 },
+  { id: "club1m", emoji: "🌟", name: "Клуб миллионеров", desc: "1 000 000 шагов с начала челленджа",
+    check: (c) => c.totals.totalSteps >= 1000000 },
+  { id: "iron_session", emoji: "💥", name: "Часовой марафон", desc: "Одна тренировка на 60+ минут",
+    check: (c) => c.totals.maxWorkoutMinutes >= 60 },
+  { id: "ultra_session", emoji: "🦾", name: "Экстремальная тренировка", desc: "Одна тренировка на 120+ минут",
+    check: (c) => c.totals.maxWorkoutMinutes >= 120 },
+  { id: "workout50", emoji: "🏆", name: "Спортивный режим", desc: "50 тренировок всего",
+    check: (c) => c.totals.totalWorkouts >= 50 },
+  { id: "workout100", emoji: "🦁", name: "Железная воля", desc: "100 тренировок всего",
+    check: (c) => c.totals.totalWorkouts >= 100 },
+  { id: "points1000", emoji: "⭐", name: "Тысяча очков", desc: "1000+ очков всего",
+    check: (c) => c.totals.points >= 1000 },
+  { id: "entries100", emoji: "🗓️", name: "Сто дней в игре", desc: "100 добавленных активностей",
+    check: (c) => c.totals.entryCount >= 100 },
+  { id: "team_legend", emoji: "🏛️", name: "Легенда команды", desc: "1 000 000 шагов всей командой",
+    check: (c) => c.teamTotals.totalSteps >= 1000000 },
+  { id: "final_day", emoji: "🏁", name: "Финишная прямая", desc: "1 день до поездки или меньше",
+    check: (c) => c.daysLeft <= 1 && c.daysLeft >= 0 }
 ];
+
+// One medal per workout type (keys must match WORKOUT_POINT_RATES/WORKOUT_INTENSITY/#workoutType
+// option values below) — unlocked the first time that type is ever logged, anywhere. Kept as a
+// separate literal instead of generated from WORKOUT_POINT_RATES so achievement ids stay stable
+// ASCII strings (workoutTypesUsed itself is keyed by the Cyrillic label, see computeTotals).
+const WORKOUT_TYPE_BADGES = [
+  { type: "Кардио", id: "wt_cardio", emoji: "🏃", name: "Кардио-старт" },
+  { type: "Плавание", id: "wt_swim", emoji: "🏊", name: "Заплыв" },
+  { type: "Велосипед", id: "wt_cycling", emoji: "🚴", name: "На колёсах" },
+  { type: "Силовая", id: "wt_strength", emoji: "🏋️", name: "Силовой старт" },
+  { type: "Танцы", id: "wt_dance", emoji: "💃", name: "Танцпол" },
+  { type: "Прогулка", id: "wt_walk", emoji: "🚶", name: "На свежем воздухе" },
+  { type: "Йога", id: "wt_yoga", emoji: "🧘", name: "Дзен" }
+];
+WORKOUT_TYPE_BADGES.forEach((b) => {
+  ACHIEVEMENTS.push({
+    id: b.id, emoji: b.emoji, name: b.name, desc: `Добавь тренировку типа «${b.type}»`,
+    check: (c) => !!(c.workoutTypesUsed && c.workoutTypesUsed[b.type])
+  });
+});
+ACHIEVEMENTS.push({
+  id: "wt_collector", emoji: "🎖️", name: "Коллекционер видов спорта", desc: "Попробуй все виды тренировок хотя бы раз",
+  check: (c) => WORKOUT_TYPE_BADGES.every((b) => c.workoutTypesUsed && c.workoutTypesUsed[b.type])
+});
+ACHIEVEMENTS.push({
+  id: "swim_power", emoji: "🌊", name: "Самый мощный заплыв", desc: "Одна тренировка плавания на 45+ минут",
+  check: (c) => (c.maxWorkoutMinutesByType && c.maxWorkoutMinutesByType["Плавание"] || 0) >= 45
+});
 
 // ---------- STATE ----------
 let USERS = [];
@@ -959,14 +1023,24 @@ function metricLabel(metric) {
 function computeTotals(login) {
   const list = Object.values(activities[login] || {});
   const agg = dailyAggregates(login);
-  let totalSteps = 0, totalWorkouts = 0, totalWorkoutMinutes = 0, points = 0, maxDaySteps = 0;
+  let totalSteps = 0, totalWorkouts = 0, totalWorkoutMinutes = 0, points = 0, maxDaySteps = 0, maxWorkoutMinutes = 0;
+  const workoutTypesUsed = {}; // workoutType -> true, for the "попробуй каждый вид тренировок" badges
+  const maxWorkoutMinutesByType = {}; // workoutType -> longest single session of that type, for per-type "power" badges (e.g. "Самый мощный заплыв")
   list.forEach((e) => {
     points += e.points || 0;
     if (e.type === "steps") totalSteps += e.steps;
-    if (e.type === "workout") { totalWorkouts += 1; totalWorkoutMinutes += e.workoutMinutes; }
+    if (e.type === "workout") {
+      totalWorkouts += 1;
+      totalWorkoutMinutes += e.workoutMinutes;
+      if (e.workoutMinutes > maxWorkoutMinutes) maxWorkoutMinutes = e.workoutMinutes;
+      if (e.workoutType) {
+        workoutTypesUsed[e.workoutType] = true;
+        if (e.workoutMinutes > (maxWorkoutMinutesByType[e.workoutType] || 0)) maxWorkoutMinutesByType[e.workoutType] = e.workoutMinutes;
+      }
+    }
   });
   Object.values(agg).forEach((d) => { if (d.steps > maxDaySteps) maxDaySteps = d.steps; });
-  return { totalSteps, totalWorkouts, totalWorkoutMinutes, points, maxDaySteps, entryCount: list.length, agg };
+  return { totalSteps, totalWorkouts, totalWorkoutMinutes, points, maxDaySteps, maxWorkoutMinutes, workoutTypesUsed, maxWorkoutMinutesByType, entryCount: list.length, agg };
 }
 
 function computeStreak(login) {
@@ -1017,11 +1091,13 @@ function computeTeamTotals() {
 // not a personal lifetime figure.
 function computeAchievements(login) {
   const lifetime = computeLifetimeStats(login);
-  const totals = { totalSteps: lifetime.totalSteps, totalWorkouts: lifetime.totalWorkouts, totalWorkoutMinutes: lifetime.totalWorkoutMinutes, points: lifetime.points, maxDaySteps: lifetime.maxDaySteps, entryCount: lifetime.entryCount };
+  const totals = { totalSteps: lifetime.totalSteps, totalWorkouts: lifetime.totalWorkouts, totalWorkoutMinutes: lifetime.totalWorkoutMinutes, points: lifetime.points, maxDaySteps: lifetime.maxDaySteps, maxWorkoutMinutes: lifetime.maxWorkoutMinutes, entryCount: lifetime.entryCount };
   const streak = { best: lifetime.bestStreak };
   const teamTotals = computeTeamTotals();
   const daysLeft = computeDaysLeft();
-  const ctx = { totals, streak, teamTotals, daysLeft };
+  const workoutTypesUsed = lifetime.workoutTypesUsed || {};
+  const maxWorkoutMinutesByType = lifetime.maxWorkoutMinutesByType || {};
+  const ctx = { totals, streak, teamTotals, daysLeft, workoutTypesUsed, maxWorkoutMinutesByType };
   return ACHIEVEMENTS.map((a) => ({ ...a, unlocked: a.check(ctx) }));
 }
 
@@ -1032,13 +1108,23 @@ function computeAchievements(login) {
 // cache (see summary at its call site).
 function summarizeActivityEntries(entriesObj) {
   const list = Object.values(entriesObj || {});
-  let totalSteps = 0, totalWorkouts = 0, totalWorkoutMinutes = 0, points = 0;
+  let totalSteps = 0, totalWorkouts = 0, totalWorkoutMinutes = 0, points = 0, maxWorkoutMinutes = 0;
   const byDate = {};
   const stepsByDate = {};
+  const workoutTypesUsed = {};
+  const maxWorkoutMinutesByType = {};
   list.forEach((e) => {
     points += e.points || 0;
     if (e.type === "steps") { totalSteps += e.steps; stepsByDate[e.date] = (stepsByDate[e.date] || 0) + e.steps; }
-    if (e.type === "workout") { totalWorkouts += 1; totalWorkoutMinutes += e.workoutMinutes; }
+    if (e.type === "workout") {
+      totalWorkouts += 1;
+      totalWorkoutMinutes += e.workoutMinutes;
+      if (e.workoutMinutes > maxWorkoutMinutes) maxWorkoutMinutes = e.workoutMinutes;
+      if (e.workoutType) {
+        workoutTypesUsed[e.workoutType] = true;
+        if (e.workoutMinutes > (maxWorkoutMinutesByType[e.workoutType] || 0)) maxWorkoutMinutesByType[e.workoutType] = e.workoutMinutes;
+      }
+    }
     const add = (e.type === "steps" ? e.steps : 0) + (e.type === "workout" ? e.workoutMinutes : 0);
     byDate[e.date] = (byDate[e.date] || 0) + add;
   });
@@ -1051,7 +1137,7 @@ function summarizeActivityEntries(entriesObj) {
     if (run > best) best = run;
     prev = d;
   });
-  return { totalSteps, totalWorkouts, totalWorkoutMinutes, points, bestStreak: best, entryCount: list.length, maxDaySteps };
+  return { totalSteps, totalWorkouts, totalWorkoutMinutes, points, bestStreak: best, entryCount: list.length, maxDaySteps, maxWorkoutMinutes, workoutTypesUsed, maxWorkoutMinutesByType };
 }
 
 // ---------- GOAL LIFECYCLE (close current goal → history → start new one) ----------
@@ -1074,6 +1160,9 @@ function computeGoalSummary() {
       points: totals.points,
       bestStreak: streak.best,
       maxDaySteps: totals.maxDaySteps,
+      maxWorkoutMinutes: totals.maxWorkoutMinutes,
+      workoutTypesUsed: totals.workoutTypesUsed,
+      maxWorkoutMinutesByType: totals.maxWorkoutMinutesByType,
       entryCount: totals.entryCount
     };
   });
@@ -1121,7 +1210,10 @@ function computeLifetimeStats(login) {
   let points = live.points;
   let bestStreak = liveStreak.best;
   let maxDaySteps = live.maxDaySteps;
+  let maxWorkoutMinutes = live.maxWorkoutMinutes;
   let entryCount = live.entryCount;
+  const workoutTypesUsed = { ...(live.workoutTypesUsed || {}) }; // union across every source below — a type tried in ANY team counts
+  const maxWorkoutMinutesByType = { ...(live.maxWorkoutMinutesByType || {}) }; // per-type max across every source — longest swim/run/etc across every team
 
   const addSource = (s) => {
     totalSteps += s.totalSteps || 0;
@@ -1130,12 +1222,19 @@ function computeLifetimeStats(login) {
     points += s.points || 0;
     if ((s.bestStreak || 0) > bestStreak) bestStreak = s.bestStreak;
     if ((s.maxDaySteps || 0) > maxDaySteps) maxDaySteps = s.maxDaySteps || 0;
+    if ((s.maxWorkoutMinutes || 0) > maxWorkoutMinutes) maxWorkoutMinutes = s.maxWorkoutMinutes || 0;
+    if (s.workoutTypesUsed) Object.keys(s.workoutTypesUsed).forEach((t) => { workoutTypesUsed[t] = true; });
+    if (s.maxWorkoutMinutesByType) {
+      Object.keys(s.maxWorkoutMinutesByType).forEach((t) => {
+        if (s.maxWorkoutMinutesByType[t] > (maxWorkoutMinutesByType[t] || 0)) maxWorkoutMinutesByType[t] = s.maxWorkoutMinutesByType[t];
+      });
+    }
     entryCount += s.entryCount || 0; // 0 for snapshots frozen before this field existed
   };
   Object.values(latestByTeam).forEach(addSource);
   Object.values(otherTeamsLiveStats).forEach(addSource);
 
-  return { totalSteps, totalWorkouts, totalWorkoutMinutes, points, bestStreak, maxDaySteps, entryCount };
+  return { totalSteps, totalWorkouts, totalWorkoutMinutes, points, bestStreak, maxDaySteps, maxWorkoutMinutes, workoutTypesUsed, maxWorkoutMinutesByType, entryCount };
 }
 
 // Called after every meta load/update — cheap no-op unless the trip date has
@@ -1475,6 +1574,9 @@ async function leaveTeam(teamId) {
             points: snap.points,
             bestStreak: snap.bestStreak,
             maxDaySteps: snap.maxDaySteps,
+            maxWorkoutMinutes: snap.maxWorkoutMinutes,
+            workoutTypesUsed: snap.workoutTypesUsed,
+            maxWorkoutMinutesByType: snap.maxWorkoutMinutesByType,
             entryCount: snap.entryCount
           }
         },
@@ -2513,7 +2615,7 @@ function renderTripHistory() {
   const wrap = $("#tripHistoryList");
   const empty = $("#tripHistoryEmpty");
   if (!wrap) return;
-  const entries = Object.entries(personalGoals || {}).sort((a, b) => (b[1].closedAt || 0) - (a[1].closedAt || 0));
+  const entries = Object.entries(personalGoals || {}).filter(([, h]) => !h.hidden).sort((a, b) => (b[1].closedAt || 0) - (a[1].closedAt || 0));
   if (!entries.length) {
     wrap.innerHTML = "";
     if (empty) empty.hidden = false;
@@ -2546,14 +2648,40 @@ function renderTripHistory() {
     return `<li class="trip-history-entry">
       <div class="trip-history-entry-head">
         <span class="trip-history-entry-emoji">${h.leftEarly ? "🚪" : "🏁"}</span>
-        <div>
+        <div class="trip-history-entry-headtext">
           <div class="trip-history-entry-title">${h.name || "Поездка"}${h.leftEarly ? '<span class="trip-history-entry-tag">покинуто</span>' : ""}</div>
           ${dateLabel ? `<div class="trip-history-entry-date">${dateLabel}</div>` : ""}
         </div>
+        <button class="trip-history-entry-hide" data-id="${id}" title="Скрыть из списка">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M5 7h14"/>
+            <path d="M9.5 7V5.2A1.2 1.2 0 0 1 10.7 4h2.6a1.2 1.2 0 0 1 1.2 1.2V7"/>
+            <path d="M7 7l.8 12a1.6 1.6 0 0 0 1.6 1.5h5.2a1.6 1.6 0 0 0 1.6-1.5L17 7"/>
+            <path d="M10.3 11v6M13.7 11v6"/>
+          </svg>
+        </button>
       </div>
       <ul class="trip-history-member-list">${members}</ul>
     </li>`;
   }).join("");
+}
+
+// Soft-hide only, on purpose: doesn't touch the underlying personalGoals
+// snapshot, just marks it so renderTripHistory() skips it. Deleting the
+// snapshot for real would silently shrink computeLifetimeStats (it sums
+// exactly these snapshots for teams no longer actively joined — see the
+// users/{uid}/completedGoals doc comment), which would look like the
+// person's steps/streak/achievements randomly dropped. This only changes
+// what shows up in the list.
+function hidePersonalGoal(cycleId) {
+  if (!personalGoals[cycleId]) return;
+  if (!confirm("Скрыть эту цель из списка «Завершённые цели»? Статистика и награды за неё останутся как есть — изменится только этот список.")) return;
+  personalGoals[cycleId].hidden = true;
+  renderTripHistory();
+  if (useCloud && firebase.auth().currentUser) {
+    const uid = firebase.auth().currentUser.uid;
+    db.ref(`users/${uid}/completedGoals/${cycleId}/hidden`).set(true);
+  }
 }
 
 // ---------- ACTIVITY ADDING ----------
@@ -2983,6 +3111,11 @@ function wireEvents() {
       return;
     }
     if (delBtn) deleteEntry(delBtn.dataset.id);
+  });
+
+  $("#tripHistoryList").addEventListener("click", (e) => {
+    const hideBtn = e.target.closest(".trip-history-entry-hide");
+    if (hideBtn) hidePersonalGoal(hideBtn.dataset.id);
   });
 
   $("#feedList").addEventListener("click", (e) => {
