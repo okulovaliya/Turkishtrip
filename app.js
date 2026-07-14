@@ -2488,7 +2488,7 @@ function renderProfile() {
   $("#teamNameLabel").textContent = activeTeamMeta.name || "Команда";
   $("#teamInviteCode").textContent = activeTeamMeta.inviteCode || "——————";
   const badge = $("#syncBadge");
-  badge.textContent = useCloud ? "☁️ синхронизировано со всеми" : "📱 только на этом устройстве";
+  badge.textContent = useCloud ? "☁️ Синхронизировано с командой" : "📱 Только на этом устройстве";
   badge.classList.toggle("cloud", useCloud);
   // Lifetime, not team-scoped — these numbers belong to the person, so they
   // must not drop back to zero just because they switched teams or left one
