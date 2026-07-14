@@ -296,6 +296,7 @@ let teamChartInstance = null;
 let toastTimer = null;
 let editingEntryId = null;
 let currentTab = "home";
+let currentTheme = "dark"; // "dark" | "light" — device display preference, not account data (see applyTheme)
 let useCloud = false;
 let db = null;
 let chartMetric = "workouts"; // home chart: steps already shown by the ring above, so default to workouts
@@ -1870,7 +1871,10 @@ function renderWeekChart() {
         pointHoverRadius,
         pointHitRadius,
         pointBackgroundColor,
-        pointBorderColor: "#fff",
+        // White pops against the dark .chart-card background as a halo
+        // ring around each dot; on the light theme that card is white too,
+        // so the ring needs to flip dark to still read as a ring at all.
+        pointBorderColor: currentTheme === "light" ? "#15331C" : "#fff",
         pointBorderWidth: 2
       }]
     },
@@ -2394,7 +2398,7 @@ function renderTeam() {
         pointHoverRadius: 5,
         pointHitRadius,
         pointBackgroundColor: dotColor,
-        pointBorderColor: "#10121A",
+        pointBorderColor: "#15331C",
         pointBorderWidth: 1.5
       };
     });
@@ -2662,6 +2666,29 @@ function showToast(emoji, text) {
   t.hidden = false;
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { t.hidden = true; }, 3800);
+}
+
+// ---------- THEME ----------
+// Device display preference, not account data — deliberately NOT synced
+// through Firebase (each phone/browser keeps its own choice, same as most
+// apps' light/dark toggle). Persisted to localStorage under the same key
+// the inline <script> in index.html's <head> reads before first paint, so
+// a returning person who picked "Светлая" never sees a flash of dark first.
+function applyTheme(theme) {
+  currentTheme = theme === "light" ? "light" : "dark";
+  if (currentTheme === "light") document.documentElement.setAttribute("data-theme", "light");
+  else document.documentElement.removeAttribute("data-theme");
+  try { localStorage.setItem("tc_theme", currentTheme); } catch (e) {}
+  document.querySelectorAll("#themeSegmented .seg-btn").forEach((b) => {
+    b.classList.toggle("active", b.dataset.themeChoice === currentTheme);
+  });
+}
+// Picks up whatever the inline <head> script already applied (or the OS
+// default if nothing was saved yet) — called once at boot so currentTheme
+// and the segmented control agree with what's actually on screen.
+function initTheme() {
+  const saved = document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
+  applyTheme(saved);
 }
 
 // ---------- MODALS ----------
@@ -2975,6 +3002,7 @@ function wireEvents() {
     }
   });
 
+  wireSegmented("#themeSegmented", "themeChoice", (val) => { applyTheme(val); rerenderCurrentTab(); }); // re-render so the home chart's point-ring color (see renderWeekChart) updates immediately, not just on the next tab switch
   wireSegmented("#metricSegmented", "metric", (val) => { chartMetric = val; renderWeekChart(); });
   wireSegmented("#periodSegmented", "period", (val) => { chartPeriod = val; renderWeekChart(); });
   wireSegmented("#teamMetricSegmented", "metric", (val) => { teamChartMetric = val; renderTeam(); });
@@ -3180,6 +3208,7 @@ function wireSegmented(containerSel, dataAttr, onChange) {
 }
 
 async function init() {
+  initTheme(); // sync currentTheme/segmented control with what the inline <head> script already applied
   await loadUsersData(); // seeds USERS for local demo mode / before a team loads
   initFirebaseApp();
   wireEvents();

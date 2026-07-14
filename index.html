@@ -7,6 +7,18 @@
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="apple-touch-icon" href="favicon.svg">
 <link rel="stylesheet" href="style.css">
+<script>
+  // Applied before the stylesheet paints anything, so a returning person
+  // who picked "Светлая" never sees a flash of the dark theme first. Kept
+  // in sync with applyTheme() in app.js (same localStorage key), which
+  // takes over for every theme change made after this point.
+  (function () {
+    try {
+      var saved = localStorage.getItem("tc_theme");
+      if (saved === "light") document.documentElement.setAttribute("data-theme", "light");
+    } catch (e) {}
+  })();
+</script>
 </head>
 <body>
 
@@ -387,6 +399,25 @@
         <div class="info-card-body" id="tripHistoryBody" hidden>
           <p class="trip-history-empty" id="tripHistoryEmpty">Пока ни одна цель не завершена</p>
           <ul class="trip-history-list" id="tripHistoryList"></ul>
+        </div>
+      </div>
+
+      <div class="field theme-field">
+        <span>Тема оформления</span>
+        <div class="segmented" id="themeSegmented">
+          <button type="button" class="seg-btn active" data-theme-choice="dark">
+            <svg class="theme-seg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M20.5 14.5A8.5 8.5 0 1 1 9.5 3.5a7 7 0 0 0 11 11z"/>
+            </svg>
+            Тёмная
+          </button>
+          <button type="button" class="seg-btn" data-theme-choice="light">
+            <svg class="theme-seg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="4.3"/>
+              <path d="M12 2.5v2.3M12 19.2v2.3M4.4 4.4l1.6 1.6M18 18l1.6 1.6M2.5 12h2.3M19.2 12h2.3M4.4 19.6l1.6-1.6M18 6l1.6-1.6"/>
+            </svg>
+            Светлая
+          </button>
         </div>
       </div>
 
