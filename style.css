@@ -1027,6 +1027,13 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   color: var(--text-dim);
 }
 .sync-badge.cloud { color: var(--teal); border-color: rgba(183,225,77,0.4); background: rgba(183,225,77,0.1); }
+/* Same bug as the nav bar: var(--teal) is a bright, light-lime color
+   that's meant to glow against a dark card — on a light card it's nearly
+   the same lightness as its own barely-tinted background, so the text
+   all but disappears. Dark green text (same one used everywhere else for
+   "on top of lime" — see .btn-primary etc.) plus a slightly stronger tint
+   so the pill itself stays visibly a distinct color, not just outline. */
+[data-theme="light"] .sync-badge.cloud { color: #15331C; border-color: rgba(143,191,60,0.45); background: rgba(183,225,77,0.22); }
 
 .stat-grid {
   display: grid;
