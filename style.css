@@ -1009,29 +1009,113 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   line-height: 1.5;
 }
 
-/* ===== ACHIEVEMENTS ===== */
+/* ===== TROPHY CARD (Профиль → entry point into Награды) ===== */
+/* Same charcoal-with-lime-glow "spotlight" look in both themes, but — like
+   .chart-card — the base swaps to a pale gradient in light theme instead of
+   staying hardcoded dark, otherwise it reads as broken/unstyled there. */
+.trophy-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* width:100% + the same side margin as every other .card would overflow
+     past the phone frame (margin is additional to a border-box width), so
+     the margin has to be subtracted explicitly here. */
+  width: calc(100% - 40px);
+  text-align: left;
+  background:
+    radial-gradient(120% 160% at 105% 15%, rgba(183, 225, 77, 0.28) 0%, transparent 55%),
+    radial-gradient(120% 140% at 15% 0%, #1C1C1C 0%, #151515 55%, #0D0D0D 100%);
+  border: 1px solid rgba(183, 225, 77, 0.22);
+  border-radius: 18px;
+  padding: 20px 16px;
+  margin: 0 20px 18px;
+  cursor: pointer;
+  overflow: hidden;
+  position: relative;
+}
+[data-theme="light"] .trophy-card {
+  background:
+    radial-gradient(120% 160% at 105% 15%, rgba(143, 191, 60, 0.32) 0%, transparent 55%),
+    radial-gradient(120% 140% at 15% 0%, #FFFFFF 0%, #F7FAF4 55%, #EAF0E3 100%);
+  border-color: rgba(143, 191, 60, 0.35);
+}
+.trophy-card:active { transform: scale(0.98); }
+.trophy-card-text { flex: 1; min-width: 0; padding-right: 90px; }
+.trophy-card-title { font-size: 15px; font-weight: 800; color: var(--text); }
+.trophy-card-sub { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+.trophy-card-track {
+  height: 6px;
+  width: 100%;
+  max-width: 170px;
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-top: 12px;
+}
+[data-theme="light"] .trophy-card-track { background: rgba(0, 0, 0, 0.12); }
+.trophy-card-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--grad-brand);
+  border-radius: 999px;
+  transition: width 0.5s ease;
+}
+/* Absolutely positioned and deliberately oversized so it bleeds past the
+   card's own edges — .trophy-card's overflow:hidden then crops it clean
+   against the rounded corners, matching the reference's "bursting out of
+   frame" look instead of being squeezed to fit inside like a normal icon.
+   Pushed down further than a centered crop would sit: the cup + handles
+   (the part that actually reads as "trophy") live in the upper portion of
+   the source image, so the crop window needs to favor the top and let the
+   base/pedestal bleed off the bottom instead, or the top gets clipped off
+   and it stops looking like a trophy at all. */
+.trophy-card-img {
+  position: absolute;
+  right: -30px;
+  bottom: -90px;
+  width: 190px;
+  height: 190px;
+  object-fit: contain;
+  transform: rotate(-14deg);
+  filter: drop-shadow(0 8px 20px rgba(183, 225, 77, 0.4));
+}
+
+/* ===== ACHIEVEMENTS (full screen, opened from the trophy card) ===== */
+.achievements-header { justify-content: flex-start; gap: 12px; }
+.achievements-header h2 { margin: 0; font-size: 19px; }
+.achievements-back {
+  width: auto;
+  height: auto;
+  border-radius: 999px;
+  padding: 8px 14px 8px 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.achievements-back svg { width: 18px; height: 18px; flex-shrink: 0; }
+.achievements-body { padding: 4px 20px 32px; }
+
 .badge-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-  max-height: 420px;
-  overflow-y: auto;
-  padding-right: 2px;
-  margin-right: -2px;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
 }
 .badge {
   background: var(--card);
   border: 1px solid var(--card-border);
-  border-radius: 12px;
-  padding: 10px 6px;
+  border-radius: 16px;
+  padding: 18px 12px;
   text-align: center;
   opacity: 0.4;
   filter: grayscale(1);
 }
 .badge.unlocked { opacity: 1; filter: none; border-color: rgba(255,176,32,0.4); box-shadow: 0 0 0 1px rgba(255,176,32,0.15); }
-.badge-emoji { font-size: 20px; margin-bottom: 3px; line-height: 1; }
-.badge-name { font-size: 10px; font-weight: 700; line-height: 1.25; }
-.badge-desc { font-size: 8.5px; color: var(--text-dim); margin-top: 2px; line-height: 1.3; }
+.badge-emoji { font-size: 32px; margin-bottom: 8px; line-height: 1; }
+.badge-name { font-size: 13px; font-weight: 700; line-height: 1.3; }
+.badge-desc { font-size: 11px; color: var(--text-dim); margin-top: 5px; line-height: 1.4; }
 
 /* ===== PROFILE ===== */
 .profile-card { text-align: center; padding: 10px 20px 22px; }

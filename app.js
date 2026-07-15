@@ -2565,6 +2565,10 @@ function renderTeam() {
 }
 
 // ---------- RENDER: ACHIEVEMENTS ----------
+// Populates #badgeGrid on the dedicated Награды screen (see openAchievementsScreen).
+// Called eagerly from renderProfile too, alongside renderTrophyCard, so the
+// full list is already built the instant the trophy card is tapped — no
+// flash of an empty grid while it opens.
 function renderAchievements() {
   const list = computeAchievements(currentUser.login);
   const wrap = $("#badgeGrid");
@@ -2578,6 +2582,36 @@ function renderAchievements() {
       <div class="badge-desc">${a.desc}</div>`;
     wrap.appendChild(el);
   });
+}
+
+// The clickable trophy tile in Профиль that opens the Награды screen —
+// summarizes progress (X of Y unlocked) instead of showing every badge inline.
+function renderTrophyCard() {
+  const list = computeAchievements(currentUser.login);
+  const total = list.length;
+  const unlocked = list.filter((a) => a.unlocked).length;
+  const pct = total ? Math.round((unlocked / total) * 100) : 0;
+  $("#trophyCardTitle").textContent = unlocked === 0
+    ? "Собери первую награду!"
+    : unlocked === total
+      ? "Все награды собраны! 🎉"
+      : "Так держать!";
+  $("#trophyCardSub").textContent = `Открыто ${unlocked} из ${total} наград`;
+  $("#trophyCardFill").style.width = pct + "%";
+}
+
+// Full-screen Награды view, opened from the trophy card in Профиль — reuses
+// the same top-level "screen" swap pattern as loginScreen/teamGateScreen
+// (hide one .screen, show another), so the bottom nav (a child of
+// #appScreen) hides along with it and reappears on the way back.
+function openAchievementsScreen() {
+  renderAchievements();
+  $("#appScreen").hidden = true;
+  $("#achievementsScreen").hidden = false;
+}
+function closeAchievementsScreen() {
+  $("#achievementsScreen").hidden = true;
+  $("#appScreen").hidden = false;
 }
 
 // ---------- RENDER: PROFILE ----------
@@ -2600,7 +2634,8 @@ function renderProfile() {
   $("#statWorkouts").textContent = lifetime.totalWorkouts;
   $("#statBestStreak").textContent = lifetime.bestStreak;
   $("#statPoints").textContent = nf(lifetime.points);
-  renderAchievements(); // now lives in Профиль as a collapsible card, not its own tab
+  renderTrophyCard();
+  renderAchievements(); // pre-populates #badgeGrid on the Награды screen (see openAchievementsScreen)
   renderTripHistory();
 }
 
@@ -3170,13 +3205,8 @@ function wireEvents() {
     chevron.classList.toggle("open", willOpen);
   });
 
-  $("#achToggle").addEventListener("click", () => {
-    const body = $("#achBody");
-    const chevron = $("#achChevron");
-    const willOpen = body.hidden;
-    body.hidden = !willOpen;
-    chevron.classList.toggle("open", willOpen);
-  });
+  $("#trophyCardBtn").addEventListener("click", openAchievementsScreen);
+  $("#achievementsBackBtn").addEventListener("click", closeAchievementsScreen);
 
   // ---- Recipes ----
   $("#addRecipeBtn").addEventListener("click", () => openRecipeForm());
