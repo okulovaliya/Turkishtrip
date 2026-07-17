@@ -247,6 +247,30 @@
       <header class="app-header simple">
         <h2>Лента 📰</h2>
       </header>
+
+      <div class="post-compose">
+        <textarea id="postComposeInput" class="post-compose-input" placeholder="Поделитесь новостью с командой..." rows="2" maxlength="500"></textarea>
+        <div class="post-compose-photo-preview" id="postComposePreview" hidden>
+          <img id="postComposePreviewImg" src="" alt="">
+          <button type="button" class="post-compose-photo-remove" id="postComposePhotoRemove" title="Убрать фото">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M6 6l12 12M18 6L6 18"/>
+            </svg>
+          </button>
+        </div>
+        <div class="post-compose-actions">
+          <label class="post-compose-photo-btn" title="Прикрепить фото">
+            <input type="file" id="postComposePhotoInput" accept="image/*" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="5" width="18" height="14" rx="2"/>
+              <circle cx="9" cy="10.5" r="1.6"/>
+              <path d="M4 17l5-4.5 3.5 3 3-3L20 17"/>
+            </svg>
+          </label>
+          <button type="button" class="btn btn-primary btn-sm post-compose-submit" id="postComposeSubmitBtn">Опубликовать</button>
+        </div>
+      </div>
+
       <div class="feed-list" id="feedList"></div>
     </div>
 
@@ -721,6 +745,16 @@
   <div class="toast" id="toast" hidden>
     <div class="toast-emoji" id="toastEmoji">🎉</div>
     <div class="toast-text" id="toastText"></div>
+  </div>
+
+  <!-- PHOTO LIGHTBOX -->
+  <div class="modal-backdrop photo-lightbox" id="photoLightbox" hidden>
+    <button type="button" class="photo-lightbox-close" data-close="photoLightbox" aria-label="Закрыть фото">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M18 6L6 18M6 6l12 12"/>
+      </svg>
+    </button>
+    <img class="photo-lightbox-img" id="photoLightboxImg" src="" alt="">
   </div>
 
 </div>
