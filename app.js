@@ -53,6 +53,31 @@
        their own activity, or a teammate logging new activity at all, newer
        than this lights up the yellow dot (see
        hasUnreadNotifications/markNotificationsSeen)
+     posts/{postId} — { id, login, name, text, hasPhoto, ts }. Free-form feed
+       posts (as opposed to auto-generated "added N steps" activity items).
+       Deliberately flat/global per team, not nested under login like
+       activities — a social post isn't a personal fitness stat, so there's
+       no cross-team mirroring for these. Kept intentionally LIGHT: never
+       contains the photo itself, only a flag — see photos/ below for why.
+       comments/{postId} and reactions/{postId} reuse the exact same nodes
+       and code as activity items (both are always keyed by a generic item
+       id, so a post id works there without any special-casing).
+     photos/{postId} — { data: "data:image/jpeg;base64,..." } — the actual
+       (client-compressed) image bytes for a post, deliberately kept OUT of
+       posts/ and never subscribed via .on(): the whole team's posts list is
+       already live-synced in full on every app open (same as activities),
+       and if photo bytes lived inside that same tree every photo ever
+       posted would get re-downloaded by every member on every single app
+       open — burns through the free Realtime Database download quota fast
+       as history grows. Instead this is read with a one-time .once() call,
+       and only when a post's photo actually scrolls into view (see
+       loadPostPhoto/photo IntersectionObserver in renderFeed) — so cost
+       scales with how much people actually look at, not with total
+       history. Fetched photos are also cached in IndexedDB (see
+       PHOTO CACHE below) since the Realtime Database Web SDK — unlike its
+       iOS/Android/Flutter counterparts — does not persist reads to disk at
+       all, so without this a page reload would re-fetch every previously
+       viewed photo all over again.
 
    Global (not team-scoped) — added this phase for real registration:
      users/{uid}/memberships/{teamId}: { login }
@@ -355,6 +380,10 @@ let activities = {}; // login -> { entryId: {id, date, type, steps?, workoutType
 let comments = {}; // activityId -> { commentId: {login, name, text, ts} }
 let reactions = {}; // activityId -> { emoji: { login: true } }
 let profiles = {}; // login -> { name?, avatar?, dailyGoal? } — user-editable overrides
+let posts = {}; // postId -> {id, login, name, text, hasPhoto, ts} — free-form feed posts, live-synced but NEVER holds photo bytes (see photos/ doc comment up top)
+let photoCache = {}; // postId -> data URL, in-memory session cache backed by IndexedDB (see openPhotoDB) — avoids re-fetching a photo already loaded once on this device
+let selectedPostPhoto = null; // data URL of the photo attached to the in-progress post, cleared after publishing/cancelling
+let photoObserver = null; // single shared IntersectionObserver instance for lazy-loading post photos in the feed (see wirePhotoObserver)
 let weekChartInstance = null;
 let teamChartInstance = null;
 let toastTimer = null;
@@ -818,6 +847,12 @@ async function subscribeToActiveTeam() {
     reactions = snap.val() || {};
     rerenderCurrentTab();
   });
+  // Deliberately just the lightweight posts/ node — photos/ is never
+  // subscribed like this, see the doc comment up top for why.
+  db.ref(teamPath("posts")).on("value", (snap) => {
+    posts = snap.val() || {};
+    rerenderCurrentTab();
+  });
   db.ref(teamPath("profiles")).on("value", (snap) => {
     profiles = snap.val() || {};
     applyProfileOverrides();
@@ -891,6 +926,10 @@ function loadLocalFallback() {
   try { comments = JSON.parse(localStorage.getItem("tc_comments") || "{}"); } catch (e) { comments = {}; }
   try { reactions = JSON.parse(localStorage.getItem("tc_reactions") || "{}"); } catch (e) { reactions = {}; }
   try { profiles = JSON.parse(localStorage.getItem("tc_profiles") || "{}"); } catch (e) { profiles = {}; }
+  // Local demo mode has no multi-device download-quota concern, so posts
+  // just carry their photo inline (photoData) instead of the cloud path's
+  // split posts/+photos/ — see addPost.
+  try { posts = JSON.parse(localStorage.getItem("tc_posts") || "{}"); } catch (e) { posts = {}; }
   try { activeTeamMeta = JSON.parse(localStorage.getItem("tc_teamMeta") || "{}"); } catch (e) { activeTeamMeta = {}; }
   // Recipes aren't team-scoped even in local demo mode — one shared bucket.
   try { recipes = JSON.parse(localStorage.getItem("tc_recipes") || "{}"); } catch (e) { recipes = {}; }
@@ -908,6 +947,7 @@ function persistLocal() {
   localStorage.setItem("tc_profiles", JSON.stringify(profiles));
   localStorage.setItem("tc_teamMeta", JSON.stringify(activeTeamMeta));
   localStorage.setItem("tc_recipes", JSON.stringify(recipes));
+  localStorage.setItem("tc_posts", JSON.stringify(posts));
 }
 
 function saveProfile(login, patch) {
@@ -1368,7 +1408,7 @@ async function attemptLogin(emailRaw, password, mode) {
 // teams, so a stale listener from a previous session can't leak data across.
 function detachTeamListeners() {
   if (!useCloud || !db) return;
-  ["activities", "comments", "reactions", "profiles", "meta", "members", "history"].forEach((node) => {
+  ["activities", "comments", "reactions", "profiles", "meta", "members", "history", "posts"].forEach((node) => {
     db.ref(teamPath(node)).off();
   });
   if (notifSeenListenerLogin) {
@@ -2360,6 +2400,118 @@ function renderRecipes() {
   }).join("");
 }
 
+// ---------- PHOTO COMPRESSION (feed post photos) ----------
+// Client-side only — resizes/re-encodes to a JPEG data URL via <canvas>, no
+// libraries or a server involved. Keeping every uploaded photo small BEFORE
+// it ever touches Firebase is what makes storing them in the free Realtime
+// Database tier viable at all (see photos/ doc comment up top).
+function compressImageFile(file, maxDim, quality) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error || new Error("Не удалось прочитать файл"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Не удалось прочитать изображение"));
+      img.onload = () => {
+        let width = img.naturalWidth, height = img.naturalHeight;
+        if (width > height && width > maxDim) { height = Math.round(height * (maxDim / width)); width = maxDim; }
+        else if (height >= width && height > maxDim) { width = Math.round(width * (maxDim / height)); height = maxDim; }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+// ---------- PHOTO CACHE (IndexedDB) ----------
+// The Realtime Database Web SDK doesn't persist reads to disk (unlike its
+// iOS/Android/Flutter counterparts — see photos/ doc comment up top), so
+// without this a page reload would re-fetch every photo a person has ever
+// scrolled past, all over again. photoCache (a plain in-memory object) only
+// helps within the current tab session; IndexedDB is what actually delivers
+// "seen once on this device, free after that" across reloads.
+const PHOTO_DB_NAME = "tc_photo_cache";
+const PHOTO_STORE_NAME = "photos";
+let photoDbPromise = null;
+function openPhotoDB() {
+  if (!window.indexedDB) return Promise.resolve(null);
+  if (photoDbPromise) return photoDbPromise;
+  photoDbPromise = new Promise((resolve) => {
+    try {
+      const req = indexedDB.open(PHOTO_DB_NAME, 1);
+      req.onupgradeneeded = () => {
+        if (!req.result.objectStoreNames.contains(PHOTO_STORE_NAME)) {
+          req.result.createObjectStore(PHOTO_STORE_NAME);
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null); // cache is a nice-to-have, never block anything on it
+    } catch (e) { resolve(null); }
+  });
+  return photoDbPromise;
+}
+async function getCachedPhoto(postId) {
+  if (photoCache[postId]) return photoCache[postId];
+  const idb = await openPhotoDB();
+  if (!idb) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = idb.transaction(PHOTO_STORE_NAME, "readonly");
+      const req = tx.objectStore(PHOTO_STORE_NAME).get(postId);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+    } catch (e) { resolve(null); }
+  });
+}
+async function setCachedPhoto(postId, dataUrl) {
+  photoCache[postId] = dataUrl;
+  const idb = await openPhotoDB();
+  if (!idb) return;
+  try {
+    const tx = idb.transaction(PHOTO_STORE_NAME, "readwrite");
+    tx.objectStore(PHOTO_STORE_NAME).put(dataUrl, postId);
+  } catch (e) { /* best-effort cache, ignore failures */ }
+}
+
+// Fetches a post's photo (cache first, then a one-time Firebase read) and
+// paints it into its placeholder — called from the IntersectionObserver in
+// wirePhotoObserver, never eagerly, so cost scales with what people actually
+// scroll to rather than with total history (see photos/ doc comment up top).
+async function loadPostPhoto(postId, imgEl) {
+  const cached = await getCachedPhoto(postId);
+  if (cached) { imgEl.src = cached; imgEl.classList.add("loaded"); return; }
+  if (!useCloud || !db) return; // local demo mode inlines the photo already, nothing to fetch
+  try {
+    const snap = await db.ref(teamPath(`photos/${postId}`)).once("value");
+    const data = snap.val() && snap.val().data;
+    if (!data) return;
+    await setCachedPhoto(postId, data);
+    imgEl.src = data;
+    imgEl.classList.add("loaded");
+  } catch (e) { /* leave the placeholder — a retry happens next time it scrolls into view */ }
+}
+
+// One shared observer for every lazy photo placeholder currently in the
+// feed — cheaper than a new IntersectionObserver per post, and simple to
+// tear down/recreate on every renderFeed() since the DOM nodes are fresh.
+function wirePhotoObserver() {
+  if (photoObserver) photoObserver.disconnect();
+  photoObserver = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      const img = entry.target;
+      photoObserver.unobserve(img);
+      loadPostPhoto(img.dataset.postId, img);
+    });
+  }, { rootMargin: "200px" });
+  document.querySelectorAll(".feed-post-photo:not(.loaded)").forEach((img) => photoObserver.observe(img));
+}
+
 // ---------- RENDER: FEED ----------
 function buildFeed() {
   const items = [];
@@ -2368,7 +2520,22 @@ function buildFeed() {
       const text = e.type === "steps"
         ? `добавила ${nf(e.steps)} шагов 🚶`
         : `добавила тренировку: ${e.workoutType}, ${e.workoutMinutes} мин${e.workoutCalories ? `, ${nf(e.workoutCalories)} ккал` : ""} 🏋️`;
-      items.push({ id: e.id, login: u.login, name: u.name, avatar: u.avatar, color: u.color, avatarGradient: u.avatarGradient, text, ts: e.ts });
+      items.push({ id: e.id, login: u.login, name: u.name, avatar: u.avatar, color: u.color, avatarGradient: u.avatarGradient, text, ts: e.ts, kind: "activity" });
+    });
+  });
+  Object.values(posts || {}).forEach((p) => {
+    const u = USERS.find((x) => x.login === p.login);
+    items.push({
+      id: p.id,
+      login: p.login,
+      name: p.name || (u && u.name) || "Без имени",
+      avatar: u ? u.avatar : "face1",
+      avatarGradient: u ? u.avatarGradient : DEFAULT_AVATAR_GRADIENT,
+      text: p.text || "",
+      hasPhoto: !!p.hasPhoto,
+      photoData: p.photoData || null, // only present in local demo mode — cloud mode always fetches via loadPostPhoto
+      ts: p.ts,
+      kind: "post"
     });
   });
   items.sort((a, b) => b.ts - a.ts);
@@ -2380,7 +2547,7 @@ function renderFeed() {
   const items = buildFeed();
   wrap.innerHTML = "";
   if (!items.length) {
-    wrap.innerHTML = `<div class="hi-empty">Пока новостей нет — добавьте активность 👆</div>`;
+    wrap.innerHTML = `<div class="hi-empty">Пока новостей нет — добавьте активность или напишите первый пост 👆</div>`;
     return;
   }
   items.forEach((item) => {
@@ -2404,14 +2571,35 @@ function renderFeed() {
           </div>`).join("")}</div>`
       : "";
 
-    el.innerHTML = `
-      <div class="feed-header">
-        <div class="avatar" style="background:${gradCss(item.avatarGradient)}"><img class="avatar-icon-img" src="${avatarSrc(item.avatar)}" alt=""></div>
-        <div class="feed-header-text">
-          <div class="feed-line"><b>${escapeHtml(item.name)}</b> ${item.text}</div>
-          <div class="feed-time">${relativeTime(item.ts)}</div>
+    // Activity items keep the original single-line "Имя добавила N шагов 🚶"
+    // format (item.text is app-generated, safe to inline unescaped, same as
+    // before). Posts are free-form user text, so it's rendered as its own
+    // escaped paragraph instead of smashed into the name line, plus an
+    // optional lazy-loaded photo and a delete button for the author.
+    const isPost = item.kind === "post";
+    const headerHtml = isPost
+      ? `<div class="feed-header">
+          <div class="avatar" style="background:${gradCss(item.avatarGradient)}"><img class="avatar-icon-img" src="${avatarSrc(item.avatar)}" alt=""></div>
+          <div class="feed-header-text">
+            <div class="feed-line"><b>${escapeHtml(item.name)}</b></div>
+            <div class="feed-time">${relativeTime(item.ts)}</div>
+          </div>
+          ${item.login === currentUser.login ? `<button class="feed-post-del" type="button" data-item="${item.id}" title="Удалить пост">✕</button>` : ""}
         </div>
-      </div>
+        ${item.text ? `<div class="feed-post-text">${escapeHtml(item.text)}</div>` : ""}
+        ${item.hasPhoto || item.photoData
+          ? `<div class="feed-post-photo-wrap"><img class="feed-post-photo${item.photoData ? " loaded" : ""}" data-post-id="${item.id}" src="${item.photoData || ""}" alt="" loading="lazy"></div>`
+          : ""}`
+      : `<div class="feed-header">
+          <div class="avatar" style="background:${gradCss(item.avatarGradient)}"><img class="avatar-icon-img" src="${avatarSrc(item.avatar)}" alt=""></div>
+          <div class="feed-header-text">
+            <div class="feed-line"><b>${escapeHtml(item.name)}</b> ${item.text}</div>
+            <div class="feed-time">${relativeTime(item.ts)}</div>
+          </div>
+        </div>`;
+
+    el.innerHTML = `
+      ${headerHtml}
       <div class="feed-reactions">${reactionsHtml}</div>
       ${commentsHtml}
       <div class="feed-comment-form">
@@ -2420,6 +2608,7 @@ function renderFeed() {
       </div>`;
     wrap.appendChild(el);
   });
+  wirePhotoObserver();
 }
 
 function addCommentFromItem(itemEl) {
@@ -2463,6 +2652,57 @@ function toggleReaction(itemId, emoji) {
   }
   if (Object.keys(reactions[itemId][emoji]).length === 0) delete reactions[itemId][emoji];
   if (!useCloud) persistLocal();
+  renderFeed();
+}
+
+// Publishes a free-form feed post, with an optional photo. photoDataUrl is
+// expected to already be a compressed JPEG data URL — compression happens
+// once, right when it's picked in the compose form (so the preview thumbnail
+// shows the same bytes that get uploaded), not a second time in here. Splits
+// the write across posts/ (light, always live-synced) and photos/ (heavy,
+// never subscribed) — see the doc comment on both up top for why. Local demo
+// mode skips that split entirely: no multi-device quota to worry about, so
+// the photo just rides along inline.
+async function addPost(text, photoDataUrl) {
+  text = (text || "").trim();
+  if (!text && !photoDataUrl) return false;
+  const id = randomId();
+  const post = { id, login: currentUser.login, name: currentUser.name, text, hasPhoto: !!photoDataUrl, ts: Date.now() };
+  posts[id] = useCloud ? post : { ...post, photoData: photoDataUrl };
+  if (useCloud) {
+    const updates = {};
+    updates[teamPath(`posts/${id}`)] = post;
+    if (photoDataUrl) updates[teamPath(`photos/${id}`)] = { data: photoDataUrl };
+    db.ref().update(updates);
+    // The author already has the photo in hand — cache it now so their own
+    // feed doesn't flash an empty placeholder waiting to lazy-fetch what
+    // they themselves just uploaded.
+    if (photoDataUrl) setCachedPhoto(id, photoDataUrl);
+  } else {
+    persistLocal();
+  }
+  renderFeed();
+  showToast("📰", "Пост опубликован!");
+  return true;
+}
+
+function deletePost(id) {
+  if (!posts[id]) return;
+  if (!confirm("Удалить этот пост?")) return;
+  delete posts[id];
+  if (comments[id]) delete comments[id];
+  if (reactions[id]) delete reactions[id];
+  delete photoCache[id];
+  if (useCloud) {
+    const updates = {};
+    updates[teamPath(`posts/${id}`)] = null;
+    updates[teamPath(`photos/${id}`)] = null;
+    updates[teamPath(`comments/${id}`)] = null;
+    updates[teamPath(`reactions/${id}`)] = null;
+    db.ref().update(updates);
+  } else {
+    persistLocal();
+  }
   renderFeed();
 }
 
@@ -2861,6 +3101,19 @@ function initTheme() {
 function openModal(id) { $("#" + id).hidden = false; }
 function closeModal(id) { $("#" + id).hidden = true; }
 
+// Full-screen viewer for a feed post's photo, opened by clicking the (already
+// loaded/uncropped-cached) thumbnail in the feed — the thumbnail itself uses
+// object-fit:cover to fit the fixed-aspect card, which crops it, so this is
+// the only place the full, un-cropped image is actually shown.
+function openPhotoLightbox(src) {
+  $("#photoLightboxImg").src = src;
+  openModal("photoLightbox");
+}
+function closePhotoLightbox() {
+  closeModal("photoLightbox");
+  $("#photoLightboxImg").src = "";
+}
+
 // ---------- NAV ----------
 function switchTab(tab) {
   currentTab = tab;
@@ -3107,6 +3360,10 @@ function wireEvents() {
     btn.addEventListener("click", () => { closeModal(btn.dataset.close); editingEntryId = null; editingRecipeId = null; });
   });
 
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("#photoLightbox").hidden) closePhotoLightbox();
+  });
+
   $("#saveStepsBtn").addEventListener("click", () => {
     const val = parseInt($("#stepsInput").value, 10);
     if (!val || val <= 0) return;
@@ -3163,6 +3420,12 @@ function wireEvents() {
     const commentDel = e.target.closest(".feed-comment-del");
     if (commentDel) { deleteComment(commentDel.dataset.item, commentDel.dataset.cid); return; }
 
+    const postDel = e.target.closest(".feed-post-del");
+    if (postDel) { deletePost(postDel.dataset.item); return; }
+
+    const photo = e.target.closest(".feed-post-photo.loaded");
+    if (photo) { openPhotoLightbox(photo.src); return; }
+
     const btn = e.target.closest(".feed-comment-btn");
     if (btn) addCommentFromItem(btn.closest(".feed-item"));
   });
@@ -3170,6 +3433,38 @@ function wireEvents() {
     if (e.key === "Enter" && e.target.classList.contains("feed-comment-input")) {
       e.preventDefault();
       addCommentFromItem(e.target.closest(".feed-item"));
+    }
+  });
+
+  // ---- Post compose (Лента) ----
+  $("#postComposePhotoInput").addEventListener("change", async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = ""; // lets picking the exact same file again still fire "change"
+    if (!file) return;
+    if (!file.type.startsWith("image/")) { showToast("⚠️", "Можно прикрепить только изображение"); return; }
+    try {
+      selectedPostPhoto = await compressImageFile(file, 1000, 0.72);
+      $("#postComposePreviewImg").src = selectedPostPhoto;
+      $("#postComposePreview").hidden = false;
+    } catch (err) {
+      showToast("⚠️", "Не удалось обработать фото");
+    }
+  });
+  $("#postComposePhotoRemove").addEventListener("click", () => {
+    selectedPostPhoto = null;
+    $("#postComposePreviewImg").src = "";
+    $("#postComposePreview").hidden = true;
+  });
+  $("#postComposeSubmitBtn").addEventListener("click", async () => {
+    const input = $("#postComposeInput");
+    const text = input.value.trim();
+    if (!text && !selectedPostPhoto) return;
+    const ok = await addPost(text, selectedPostPhoto);
+    if (ok) {
+      input.value = "";
+      selectedPostPhoto = null;
+      $("#postComposePreviewImg").src = "";
+      $("#postComposePreview").hidden = true;
     }
   });
 

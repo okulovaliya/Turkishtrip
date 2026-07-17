@@ -963,6 +963,102 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 .feed-comment-btn:active { transform: scale(0.95); }
 
+/* ===== POST COMPOSE (Лента) ===== */
+.post-compose {
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: 16px;
+  padding: 12px 14px;
+  margin: 0 20px 16px;
+}
+.post-compose-input {
+  width: 100%;
+  background: var(--bg-2);
+  border: 1px solid var(--card-border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  color: var(--text);
+  font-size: 13.5px;
+  font-family: inherit;
+  resize: none;
+  outline: none;
+}
+.post-compose-input:focus { border-color: var(--teal); }
+.post-compose-photo-preview {
+  position: relative;
+  margin-top: 10px;
+  width: 100px;
+  height: 100px;
+  border-radius: 12px;
+  overflow: hidden;
+}
+.post-compose-photo-preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.post-compose-photo-remove {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  border: none;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+.post-compose-photo-remove svg { width: 13px; height: 13px; }
+.post-compose-actions { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
+.post-compose-photo-btn {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--bg-2);
+  border: 1px solid var(--card-border);
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.post-compose-photo-btn svg { width: 19px; height: 19px; }
+.post-compose-photo-btn:active { transform: scale(0.94); }
+
+/* ===== FEED POSTS (free-form posts, as opposed to activity items) ===== */
+.feed-post-text { font-size: 13.5px; line-height: 1.5; margin-top: 10px; white-space: pre-wrap; word-break: break-word; }
+/* Fixed aspect-ratio box so the card doesn't jump around once the lazy
+   photo actually loads — see loadPostPhoto/wirePhotoObserver in app.js. */
+.feed-post-photo-wrap {
+  margin-top: 10px;
+  border-radius: 14px;
+  overflow: hidden;
+  aspect-ratio: 4 / 3;
+  background: var(--bg-2);
+}
+.feed-post-photo {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+.feed-post-photo.loaded { opacity: 1; cursor: pointer; }
+.feed-post-del {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 4px;
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+.feed-post-del:active { color: var(--danger); }
+
 /* ===== TEAM TAB ===== */
 .team-list { display: flex; flex-direction: column; gap: 12px; }
 .team-row {
@@ -1375,5 +1471,42 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   from { opacity: 0; transform: translate(-50%, 20px); }
   to { opacity: 1; transform: translate(-50%, 0); }
 }
+
+/* ===== PHOTO LIGHTBOX ===== */
+/* Full, un-cropped view of a feed post's photo — the thumbnail in the feed
+   uses object-fit:cover inside a fixed 4:3 box (see .feed-post-photo), which
+   crops it; this shows the whole image via object-fit:contain instead. */
+.photo-lightbox {
+  align-items: center;
+  background: rgba(4, 5, 9, 0.94);
+  z-index: 70;
+  padding: 20px;
+}
+.photo-lightbox-img {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 12px;
+}
+.photo-lightbox-close {
+  position: fixed;
+  top: calc(18px + env(safe-area-inset-top));
+  right: 18px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  border: none;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 71;
+}
+.photo-lightbox-close svg { width: 20px; height: 20px; }
+.photo-lightbox-close:active { transform: scale(0.94); }
 
 [hidden] { display: none !important; }
