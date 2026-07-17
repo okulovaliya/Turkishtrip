@@ -2516,7 +2516,10 @@ function renderTeam() {
           legend: {
             position: "bottom",
             labels: {
-              color: "#F4F5F7",
+              // Near-white pops on the dark .chart-card; on the light theme
+              // that card turns pale, so the names need to flip dark or
+              // they disappear (same reasoning as pointBorderColor above).
+              color: currentTheme === "light" ? "#171A16" : "#F4F5F7",
               usePointStyle: true,
               pointStyle: "rectRounded",
               boxWidth: 12,
