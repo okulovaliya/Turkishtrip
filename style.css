@@ -736,6 +736,13 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   white-space: nowrap;
 }
 .chart-trend-pct.down { background: rgba(255, 176, 32, 0.16); color: #FFB020; }
+/* Same contrast problem as .sync-badge.cloud / .nav-btn.active: bright
+   lime/amber text on a barely-tinted background pops against a dark card
+   but nearly vanishes on the light theme's pale one — needs a dark, not
+   bright, tone there, with a slightly stronger tint so the pill still reads
+   as a pill rather than washing out. */
+[data-theme="light"] .chart-trend-pct { background: rgba(143, 191, 60, 0.22); color: #15331C; }
+[data-theme="light"] .chart-trend-pct.down { background: rgba(255, 176, 32, 0.22); color: #7A4E00; }
 .chart-trend-caption { font-size: 9.5px; color: var(--text-dim); white-space: nowrap; }
 .chart-canvas-wrap { margin: 0 -4px; }
 
