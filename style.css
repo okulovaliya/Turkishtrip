@@ -848,7 +848,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
 .history-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .history-item {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
   font-size: 13.5px;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--card-border);
@@ -859,6 +859,16 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .hi-date { color: var(--text-dim); font-size: 11.5px; }
 .hi-points { font-weight: 700; color: var(--gold); font-size: 12.5px; }
 .hi-actions { display: flex; gap: 4px; margin-left: 2px; }
+/* Optional comment attached when logging steps/a workout — forced onto its
+   own full-width line (flex-basis:100%) under the icon+text row above,
+   indented to roughly line up under the main text (emoji width + gap). */
+.hi-note {
+  flex-basis: 100%;
+  margin: 2px 0 0 28px;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--text-dim);
+}
 .hi-edit, .hi-delete {
   background: none;
   border: none;
@@ -1182,6 +1192,41 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   transform: rotate(-14deg);
   filter: drop-shadow(0 8px 20px rgba(183, 225, 77, 0.4));
 }
+
+/* ===== WEEKLY DIGEST (Profile) ===== */
+/* Team-wide "итоги недели" card — read-only aggregate over already-synced
+   activities (see renderWeeklyDigest), no new Firebase node. */
+.weekly-digest-card { display: flex; flex-direction: column; gap: 14px; }
+.wd-header { display: flex; align-items: baseline; justify-content: space-between; }
+.wd-header .card-title { margin-bottom: 0; }
+.wd-range { font-size: 11.5px; color: var(--text-dim); }
+.wd-leaders { display: flex; flex-direction: column; gap: 8px; }
+.wd-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-2);
+  border-radius: 12px;
+  padding: 8px 12px;
+}
+.wd-row .avatar { width: 32px; height: 32px; font-size: 15px; flex-shrink: 0; }
+.wd-rank { font-size: 13px; font-weight: 700; color: var(--text-dim); width: 20px; text-align: center; flex-shrink: 0; }
+.wd-name { flex: 1; font-size: 13.5px; font-weight: 600; }
+.wd-steps { font-size: 13px; font-weight: 800; color: var(--gold); }
+.wd-empty { font-size: 12.5px; color: var(--text-dim); text-align: center; padding: 10px 0; }
+.wd-highlights { display: flex; flex-direction: column; }
+.wd-highlight {
+  display: flex;
+  align-items: center;
+  text-align: left;
+  gap: 12px;
+  background: var(--bg-2);
+  border-radius: 14px;
+  padding: 14px 16px;
+}
+.wd-highlight-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.wd-highlight-label { font-size: 11px; color: var(--text-dim); line-height: 1.35; }
+.wd-highlight-value { font-size: 13.5px; font-weight: 700; line-height: 1.4; overflow-wrap: break-word; }
 
 /* ===== ACHIEVEMENTS (full screen, opened from the trophy card) ===== */
 .achievements-header { justify-content: flex-start; gap: 12px; }

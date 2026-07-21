@@ -54,7 +54,7 @@
         <input type="password" id="passwordInput" autocomplete="current-password" placeholder="••••••••" required>
       </label>
       <p id="loginError" class="login-error" hidden></p>
-      <button type="submit" class="btn btn-primary btn-block" id="loginSubmitBtn">Войти ✈️</button>
+      <button type="submit" class="btn btn-primary btn-block" id="loginSubmitBtn">Войти</button>
       <p class="login-hint" id="loginHint">Введите email и пароль, которые вы уже использовали.</p>
     </form>
   </section>
@@ -414,6 +414,22 @@
         <img class="trophy-card-img" src="cup.PNG" alt="" loading="lazy">
       </button>
 
+      <div class="card weekly-digest-card">
+        <div class="wd-header">
+          <span class="card-title">Итоги недели</span>
+          <span class="wd-range" id="weeklyDigestRange"></span>
+        </div>
+        <div class="wd-leaders" id="weeklyDigestLeaders"></div>
+        <div class="wd-highlights">
+          <div class="wd-highlight">
+            <div class="wd-highlight-text">
+              <div class="wd-highlight-label">Самая активная тренировка</div>
+              <div class="wd-highlight-value" id="weeklyDigestWorkout">—</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div class="card info-card">
         <button type="button" class="info-card-toggle" id="tripHistoryToggle">
           <span class="card-title">🏁 Завершённые цели</span>
@@ -518,6 +534,7 @@
         <span>Дата</span>
         <input type="date" id="stepsDate" class="modal-input">
       </label>
+      <input type="text" id="stepsNote" class="modal-input" placeholder="Комментарий (необязательно)" maxlength="140">
       <div class="modal-actions">
         <button class="btn btn-secondary" data-close="stepsModal">Отмена</button>
         <button class="btn btn-primary" id="saveStepsBtn">Сохранить</button>
@@ -544,6 +561,7 @@
         <span>Дата</span>
         <input type="date" id="workoutDate" class="modal-input">
       </label>
+      <input type="text" id="workoutNote" class="modal-input" placeholder="Комментарий (необязательно)" maxlength="140">
       <div class="modal-actions">
         <button class="btn btn-secondary" data-close="workoutModal">Отмена</button>
         <button class="btn btn-primary" id="saveWorkoutBtn">Сохранить</button>

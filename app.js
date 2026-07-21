@@ -34,8 +34,14 @@
                           moment the goal closed (all-time totals — activities
                           themselves are never reset/archived). Same shape is
                           used by users/{uid}/completedGoals — see below.
-     activities/{login}/{entryId}   — unchanged shape from before, except:
-       if the account belongs to more than one team, every entry is also
+     activities/{login}/{entryId}   — { id, date, type: "steps"|"workout",
+       steps, workoutType, workoutMinutes, workoutCalories, points,
+       note, ts }. `note` is an optional free-text comment the person can
+       attach when logging (e.g. "болело колено, бежала медленнее") — null
+       when not set, shown under the entry in both the Home history list and
+       the feed (see renderHistory/buildFeed+renderFeed). It's just plain
+       display text, not read by any achievement/points/streak logic.
+       If the account belongs to more than one team, every entry is also
        written as a full independent copy into every OTHER team's own
        activities/{theirLogin}/{entryId} — same id everywhere, so a later
        edit/delete can find and update every copy (see CROSS-TEAM ACTIVITY
@@ -61,7 +67,18 @@
        contains the photo itself, only a flag — see photos/ below for why.
        comments/{postId} and reactions/{postId} reuse the exact same nodes
        and code as activity items (both are always keyed by a generic item
-       id, so a post id works there without any special-casing).
+       id, so a post id works there without any special-casing). `login` is
+       usually a real teammate, but can also be the synthetic value
+       "system" for the auto-posted Monday digest reminder (see
+       checkWeeklyDigestPost) — buildFeed/renderFeed treat it like any
+       other post, just with no matching USERS entry (falls back to a
+       default avatar) and no delete button (login never equals
+       currentUser.login).
+     lastWeeklyDigestDate — a bare "YYYY-MM-DD" string, the guard field for
+       checkWeeklyDigestPost's Firebase transaction: only the first client
+       to flip it to today's date (and only on a Monday) goes on to post
+       the weekly-digest reminder, so several teammates opening the app
+       around the same moment don't each post a duplicate.
      photos/{postId} — { data: "data:image/jpeg;base64,..." } — the actual
        (client-compressed) image bytes for a post, deliberately kept OUT of
        posts/ and never subscribed via .on(): the whole team's posts list is
@@ -436,6 +453,32 @@ function getLastNDates(n) {
     const d = new Date(today);
     d.setDate(d.getDate() - i);
     out.push(formatDate(d));
+  }
+  return out;
+}
+// Calendar-week (ISO, Monday-anchored) dates, Monday through Sunday, for the
+// full week immediately BEFORE the one containing `d` — used only by the
+// Итоги недели digest (see renderWeeklyDigest). Deliberately the *previous*
+// completed week, not the one still in progress: on a Tuesday the current
+// week has only had one day to accumulate data, so "недавно прошедшая
+// неделя" (the week that just fully ended) is what's actually meaningful to
+// show. This is also why the digest is posted to the feed every Monday —
+// that's the first day the previous week is fully closed out. Not a rolling
+// trailing-7-days window like getLastNDates/weekOverWeekTotals (those stay
+// rolling — they drive the "% vs last week" trend badges elsewhere, which
+// are intentionally always-7-days-back, not calendar-aligned).
+function getLastFullWeekDates(d) {
+  const day = d.getDay(); // 0 = Sunday ... 6 = Saturday
+  const diffToMonday = day === 0 ? -6 : 1 - day;
+  const thisMonday = startOfDay(new Date(d));
+  thisMonday.setDate(thisMonday.getDate() + diffToMonday);
+  const lastMonday = new Date(thisMonday);
+  lastMonday.setDate(lastMonday.getDate() - 7);
+  const out = [];
+  for (let i = 0; i < 7; i++) {
+    const x = new Date(lastMonday);
+    x.setDate(x.getDate() + i);
+    out.push(formatDate(x));
   }
   return out;
 }
@@ -888,6 +931,7 @@ async function subscribeToActiveTeam() {
   activeTeamMeta = metaSnap.val() || {};
   activeTripDate = activeTeamMeta.tripDate ? new Date(activeTeamMeta.tripDate) : TRIP_DATE;
   checkGoalClosure();
+  checkWeeklyDigestPost();
 
   db.ref(teamPath("meta")).on("value", (snap) => {
     activeTeamMeta = snap.val() || {};
@@ -1321,6 +1365,42 @@ async function closeActiveGoal() {
   } finally {
     closingGoal = false;
   }
+}
+
+// Posts a system reminder ("📅 Посмотрите итоги недели в профиле!") into the
+// feed once every Monday, per team — nudging people toward the Итоги недели
+// card in Профиль (see renderWeeklyDigest). There's no server/cron here
+// (same accepted limitation as checkGoalClosure above), so this only fires
+// when someone actually has the app open on Monday; it's checked once per
+// team-session load in subscribeToActiveTeam. Guard field is
+// teams/{teamId}/lastWeeklyDigestDate (a YYYY-MM-DD string) — same
+// transaction-race pattern as closeActiveGoal's meta/status: several
+// teammates can easily open the app around the same moment on a Monday, and
+// a plain read-then-write would risk posting the reminder twice. Only the
+// one client whose transaction actually flips the date to today gets
+// committed === true and goes on to write the post; everyone else sees
+// today's date already there, aborts, and does nothing.
+async function checkWeeklyDigestPost() {
+  if (!useCloud || !db) return; // local demo mode = single tab, no race to solve, skip entirely
+  if (new Date().getDay() !== 1) return; // 0 = Sunday ... 1 = Monday
+  const todayStr = getTodayStr();
+  try {
+    const result = await db.ref(teamPath("lastWeeklyDigestDate")).transaction((current) => {
+      if (current === todayStr) return; // abort — already posted today
+      return todayStr;
+    });
+    if (!result.committed) return; // another client already won this Monday
+    const id = randomId();
+    const post = {
+      id,
+      login: "system",
+      name: "Squad Challenge",
+      text: "📅 Посмотрите итоги недели в профиле!",
+      hasPhoto: false,
+      ts: Date.now()
+    };
+    await db.ref(teamPath(`posts/${id}`)).set(post);
+  } catch (e) { /* best-effort — a missed Monday isn't worth surfacing an error for */ }
 }
 
 // Only team owners can edit the active trip or start a new goal (per-team
@@ -1788,7 +1868,8 @@ function renderHistory() {
             <path d="M10.3 11v6M13.7 11v6"/>
           </svg>
         </button>
-      </span>`;
+      </span>
+      ${e.note ? `<div class="hi-note">${escapeHtml(e.note)}</div>` : ""}`;
     el.appendChild(li);
   });
 }
@@ -1799,6 +1880,7 @@ function openEditModalForEntry(entry) {
     $("#stepsInput").value = entry.steps;
     $("#stepsDate").max = getTodayStr();
     $("#stepsDate").value = entry.date;
+    $("#stepsNote").value = entry.note || "";
     $("#stepsModalTitle").textContent = "Изменить шаги ✏️";
     $("#saveStepsBtn").textContent = "Сохранить изменения";
     openModal("stepsModal");
@@ -1808,25 +1890,27 @@ function openEditModalForEntry(entry) {
     $("#workoutCalories").value = entry.workoutCalories || "";
     $("#workoutDate").max = getTodayStr();
     $("#workoutDate").value = entry.date;
+    $("#workoutNote").value = entry.note || "";
     $("#workoutModalTitle").textContent = "Изменить тренировку ✏️";
     $("#saveWorkoutBtn").textContent = "Сохранить изменения";
     openModal("workoutModal");
   }
 }
 
-function updateStepsEntry(id, steps, date) {
+function updateStepsEntry(id, steps, date, note) {
   const entry = activities[currentUser.login] && activities[currentUser.login][id];
   if (!entry) return;
   entry.steps = steps;
   entry.points = pointsForSteps(steps);
   entry.date = date || entry.date;
-  if (useCloud) { db.ref(teamPath(`activities/${currentUser.login}/${id}`)).update({ steps: entry.steps, points: entry.points, date: entry.date }); mirrorEntryToOtherTeams(id, entry); }
+  entry.note = note || null;
+  if (useCloud) { db.ref(teamPath(`activities/${currentUser.login}/${id}`)).update({ steps: entry.steps, points: entry.points, date: entry.date, note: entry.note }); mirrorEntryToOtherTeams(id, entry); }
   else persistLocal();
   showToast("✏️", "Запись обновлена!");
   renderHome();
 }
 
-function updateWorkoutEntry(id, type, minutes, calories, date) {
+function updateWorkoutEntry(id, type, minutes, calories, date, note) {
   const entry = activities[currentUser.login] && activities[currentUser.login][id];
   if (!entry) return;
   entry.workoutType = type;
@@ -1834,13 +1918,15 @@ function updateWorkoutEntry(id, type, minutes, calories, date) {
   entry.workoutCalories = calories || null;
   entry.points = pointsForWorkout(minutes, type);
   entry.date = date || entry.date;
+  entry.note = note || null;
   if (useCloud) {
     db.ref(teamPath(`activities/${currentUser.login}/${id}`)).update({
       workoutType: entry.workoutType,
       workoutMinutes: entry.workoutMinutes,
       workoutCalories: entry.workoutCalories,
       points: entry.points,
-      date: entry.date
+      date: entry.date,
+      note: entry.note
     });
     mirrorEntryToOtherTeams(id, entry);
   } else {
@@ -2520,7 +2606,7 @@ function buildFeed() {
       const text = e.type === "steps"
         ? `добавила ${nf(e.steps)} шагов 🚶`
         : `добавила тренировку: ${e.workoutType}, ${e.workoutMinutes} мин${e.workoutCalories ? `, ${nf(e.workoutCalories)} ккал` : ""} 🏋️`;
-      items.push({ id: e.id, login: u.login, name: u.name, avatar: u.avatar, color: u.color, avatarGradient: u.avatarGradient, text, ts: e.ts, kind: "activity" });
+      items.push({ id: e.id, login: u.login, name: u.name, avatar: u.avatar, color: u.color, avatarGradient: u.avatarGradient, text, note: e.note || "", ts: e.ts, kind: "activity" });
     });
   });
   Object.values(posts || {}).forEach((p) => {
@@ -2596,7 +2682,8 @@ function renderFeed() {
             <div class="feed-line"><b>${escapeHtml(item.name)}</b> ${item.text}</div>
             <div class="feed-time">${relativeTime(item.ts)}</div>
           </div>
-        </div>`;
+        </div>
+        ${item.note ? `<div class="feed-post-text">${escapeHtml(item.note)}</div>` : ""}`;
 
     el.innerHTML = `
       ${headerHtml}
@@ -2879,7 +2966,57 @@ function renderProfile() {
   $("#statPoints").textContent = nf(lifetime.points);
   renderTrophyCard();
   renderAchievements(); // pre-populates #badgeGrid on the Награды screen (see openAchievementsScreen)
+  renderWeeklyDigest();
   renderTripHistory();
+}
+
+// Team-wide "итоги недели" card: who walked the most during the last full
+// calendar week (Monday through Sunday — see getLastFullWeekDates) and the
+// single most notable (longest) workout logged during it. Pure
+// read/aggregate over already-synced `activities` — no new Firebase node
+// needed.
+function renderWeeklyDigest() {
+  // The most recently COMPLETED calendar week, not the one still in
+  // progress — see getLastFullWeekDates doc comment for why (also why this
+  // differs from getLastNDates/weekOverWeekTotals used elsewhere).
+  const dates = getLastFullWeekDates(new Date());
+  const shortDate = (ds) => { const [, m, d] = ds.split("-"); return `${d}.${m}`; };
+  $("#weeklyDigestRange").textContent = `${shortDate(dates[0])} – ${shortDate(dates[dates.length - 1])}`;
+
+  const leaders = USERS
+    .map((u) => {
+      const agg = dailyAggregates(u.login);
+      const steps = dates.reduce((sum, ds) => sum + (agg[ds] ? agg[ds].steps : 0), 0);
+      return { u, steps };
+    })
+    .sort((a, b) => b.steps - a.steps);
+
+  const leadersWrap = $("#weeklyDigestLeaders");
+  if (!leaders.some((l) => l.steps > 0)) {
+    leadersWrap.innerHTML = `<div class="wd-empty">На прошлой неделе не было записей 🤷</div>`;
+  } else {
+    const medals = ["🥇", "🥈", "🥉"];
+    leadersWrap.innerHTML = leaders.map((l, i) => `
+      <div class="wd-row">
+        <span class="wd-rank">${medals[i] || (i + 1) + "."}</span>
+        <div class="avatar" style="background:${gradCss(l.u.avatarGradient)}"><img class="avatar-icon-img" src="${avatarSrc(l.u.avatar)}" alt=""></div>
+        <div class="wd-name">${escapeHtml(l.u.name)}</div>
+        <div class="wd-steps">${nf(l.steps)}</div>
+      </div>`).join("");
+  }
+
+  let bestWorkout = null;
+  USERS.forEach((u) => {
+    Object.values(activities[u.login] || {}).forEach((e) => {
+      if (e.type !== "workout" || !dates.includes(e.date)) return;
+      if (!bestWorkout || e.workoutMinutes > bestWorkout.minutes) {
+        bestWorkout = { name: u.name, type: e.workoutType, minutes: e.workoutMinutes };
+      }
+    });
+  });
+  $("#weeklyDigestWorkout").textContent = bestWorkout
+    ? `${bestWorkout.name} — ${bestWorkout.type}, ${bestWorkout.minutes} мин`
+    : "На прошлой неделе не было тренировок";
 }
 
 // Archive of past closed goals — newest first. Each entry is the frozen
@@ -2963,20 +3100,20 @@ function hidePersonalGoal(cycleId) {
 }
 
 // ---------- ACTIVITY ADDING ----------
-function addStepsEntry(steps, date) {
+function addStepsEntry(steps, date, note) {
   const before = new Set(computeAchievements(currentUser.login).filter((a) => a.unlocked).map((a) => a.id));
   const id = randomId();
-  const entry = { id, date: date || getTodayStr(), type: "steps", steps, points: pointsForSteps(steps), ts: Date.now() };
+  const entry = { id, date: date || getTodayStr(), type: "steps", steps, points: pointsForSteps(steps), note: note || null, ts: Date.now() };
   if (!activities[currentUser.login]) activities[currentUser.login] = {};
   activities[currentUser.login][id] = entry;
   if (useCloud) { db.ref(teamPath(`activities/${currentUser.login}/${id}`)).set(entry); mirrorEntryToOtherTeams(id, entry); }
   else persistLocal();
   afterAdd("steps", before);
 }
-function addWorkoutEntry(type, minutes, calories, date) {
+function addWorkoutEntry(type, minutes, calories, date, note) {
   const before = new Set(computeAchievements(currentUser.login).filter((a) => a.unlocked).map((a) => a.id));
   const id = randomId();
-  const entry = { id, date: date || getTodayStr(), type: "workout", workoutType: type, workoutMinutes: minutes, workoutCalories: calories || null, points: pointsForWorkout(minutes, type), ts: Date.now() };
+  const entry = { id, date: date || getTodayStr(), type: "workout", workoutType: type, workoutMinutes: minutes, workoutCalories: calories || null, points: pointsForWorkout(minutes, type), note: note || null, ts: Date.now() };
   if (!activities[currentUser.login]) activities[currentUser.login] = {};
   activities[currentUser.login][id] = entry;
   if (useCloud) { db.ref(teamPath(`activities/${currentUser.login}/${id}`)).set(entry); mirrorEntryToOtherTeams(id, entry); }
@@ -3151,7 +3288,7 @@ function setAuthMode(mode) {
   $("#authModeSegmented").querySelectorAll(".seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
   $("#nameField").hidden = !registering;
   $("#nameInput").required = registering;
-  $("#loginSubmitBtn").textContent = registering ? "Зарегистрироваться ✈️" : "Войти ✈️";
+  $("#loginSubmitBtn").textContent = registering ? "Зарегистрироваться" : "Войти";
   $("#loginHint").textContent = registering
     ? "Придумайте пароль от 6 символов — аккаунт создастся автоматически."
     : "Введите email и пароль, которые вы уже использовали.";
@@ -3343,6 +3480,7 @@ function wireEvents() {
     $("#stepsInput").value = "";
     $("#stepsDate").max = getTodayStr();
     $("#stepsDate").value = getTodayStr();
+    $("#stepsNote").value = "";
     openModal("stepsModal");
   });
   $("#openWorkoutModal").addEventListener("click", () => {
@@ -3353,6 +3491,7 @@ function wireEvents() {
     $("#workoutCalories").value = "";
     $("#workoutDate").max = getTodayStr();
     $("#workoutDate").value = getTodayStr();
+    $("#workoutNote").value = "";
     openModal("workoutModal");
   });
 
@@ -3368,12 +3507,13 @@ function wireEvents() {
     const val = parseInt($("#stepsInput").value, 10);
     if (!val || val <= 0) return;
     const date = $("#stepsDate").value || getTodayStr();
+    const note = $("#stepsNote").value.trim();
     closeModal("stepsModal");
     if (editingEntryId) {
-      updateStepsEntry(editingEntryId, val, date);
+      updateStepsEntry(editingEntryId, val, date, note);
       editingEntryId = null;
     } else {
-      addStepsEntry(val, date);
+      addStepsEntry(val, date, note);
     }
   });
 
@@ -3384,12 +3524,13 @@ function wireEvents() {
     const caloriesRaw = parseInt($("#workoutCalories").value, 10);
     const calories = caloriesRaw > 0 ? caloriesRaw : null;
     const date = $("#workoutDate").value || getTodayStr();
+    const note = $("#workoutNote").value.trim();
     closeModal("workoutModal");
     if (editingEntryId) {
-      updateWorkoutEntry(editingEntryId, type, minutes, calories, date);
+      updateWorkoutEntry(editingEntryId, type, minutes, calories, date, note);
       editingEntryId = null;
     } else {
-      addWorkoutEntry(type, minutes, calories, date);
+      addWorkoutEntry(type, minutes, calories, date, note);
     }
   });
 
