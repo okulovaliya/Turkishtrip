@@ -224,6 +224,20 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .login-hint { text-align: center; color: var(--text-dim); font-size: 11.5px; margin: 4px 0 0; }
 .login-hint code { color: var(--gold); }
 
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--gold);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+  align-self: flex-end;
+  margin-top: -6px;
+}
+.link-btn:disabled { opacity: 0.55; cursor: default; }
+
 /* ===== BUTTONS ===== */
 .btn {
   border: none;
@@ -890,6 +904,11 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
 /* ===== FEED TAB ===== */
 .feed-list { display: flex; flex-direction: column; gap: 14px; padding: 0 20px; }
+/* Overrides .btn-block's width:100% — margin isn't absorbed into a
+   border-box width, so width:100% + horizontal margin here would overflow
+   the viewport by 2×20px (same overflow bug fixed earlier on .trophy-card;
+   .card avoids it entirely by using margin alone with no explicit width). */
+.feed-load-more { width: calc(100% - 40px); margin: 14px 20px 4px; }
 .feed-item {
   background: var(--card);
   border: 1px solid var(--card-border);
