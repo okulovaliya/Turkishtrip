@@ -401,6 +401,8 @@ let posts = {}; // postId -> {id, login, name, text, hasPhoto, ts} — free-form
 let photoCache = {}; // postId -> data URL, in-memory session cache backed by IndexedDB (see openPhotoDB) — avoids re-fetching a photo already loaded once on this device
 let selectedPostPhoto = null; // data URL of the photo attached to the in-progress post, cleared after publishing/cancelling
 let photoObserver = null; // single shared IntersectionObserver instance for lazy-loading post photos in the feed (see wirePhotoObserver)
+const FEED_PAGE_SIZE = 40; // how many feed items renderFeed shows at once, and how many more "Загрузить ещё" reveals per click
+let feedVisibleCount = FEED_PAGE_SIZE; // grows as the person clicks "Загрузить ещё" (see #feedLoadMoreBtn); persists for the session, not reset per render
 let weekChartInstance = null;
 let teamChartInstance = null;
 let toastTimer = null;
@@ -2625,15 +2627,18 @@ function buildFeed() {
     });
   });
   items.sort((a, b) => b.ts - a.ts);
-  return items.slice(0, 40);
+  return items; // unbounded — renderFeed slices to feedVisibleCount and drives "Загрузить ещё"
 }
 
 function renderFeed() {
   const wrap = $("#feedList");
-  const items = buildFeed();
+  const allItems = buildFeed();
+  const items = allItems.slice(0, feedVisibleCount);
+  const loadMoreBtn = $("#feedLoadMoreBtn");
   wrap.innerHTML = "";
   if (!items.length) {
     wrap.innerHTML = `<div class="hi-empty">Пока новостей нет — добавьте активность или напишите первый пост 👆</div>`;
+    loadMoreBtn.hidden = true;
     return;
   }
   items.forEach((item) => {
@@ -2695,6 +2700,7 @@ function renderFeed() {
       </div>`;
     wrap.appendChild(el);
   });
+  loadMoreBtn.hidden = allItems.length <= items.length;
   wirePhotoObserver();
 }
 
@@ -3288,6 +3294,7 @@ function setAuthMode(mode) {
   $("#authModeSegmented").querySelectorAll(".seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
   $("#nameField").hidden = !registering;
   $("#nameInput").required = registering;
+  $("#forgotPasswordBtn").hidden = registering; // resetting a password only makes sense once an account already exists
   $("#loginSubmitBtn").textContent = registering ? "Зарегистрироваться" : "Войти";
   $("#loginHint").textContent = registering
     ? "Придумайте пароль от 6 символов — аккаунт создастся автоматически."
@@ -3311,7 +3318,7 @@ function wireEvents() {
     btn.textContent = registering ? "Регистрируем..." : "Входим...";
     const result = await attemptLogin(email, password, authMode);
     btn.disabled = false;
-    btn.textContent = registering ? "Зарегистрироваться ✈️" : "Войти ✈️";
+    btn.textContent = registering ? "Зарегистрироваться" : "Войти";
     if (!result.ok) {
       $("#loginError").textContent = result.error;
       $("#loginError").hidden = false;
@@ -3325,6 +3332,46 @@ function wireEvents() {
       return;
     }
     await enterTeam(result.uid, result.email, name);
+  });
+
+  // Firebase Auth already stores/verifies passwords itself (see README —
+  // "убирает пароли из файлов проекта"), so recovering a forgotten one is
+  // just Firebase's own built-in reset-email flow: no server code of ours
+  // involved, works the moment Email/Password sign-in is enabled in the
+  // console (no extra setup). Reuses #loginError for failures, same
+  // .hidden-toggle convention as the submit handler above.
+  $("#forgotPasswordBtn").addEventListener("click", async () => {
+    const email = $("#loginInput").value.trim().toLowerCase();
+    const errEl = $("#loginError");
+    if (!email) {
+      errEl.textContent = "Сначала введите email в поле выше.";
+      errEl.hidden = false;
+      return;
+    }
+    if (!useCloud) {
+      errEl.textContent = "Восстановление пароля доступно только при подключённом Firebase — см. README.";
+      errEl.hidden = false;
+      return;
+    }
+    errEl.hidden = true;
+    const btn = $("#forgotPasswordBtn");
+    btn.disabled = true;
+    try {
+      await firebase.auth().sendPasswordResetEmail(email);
+      showToast("📧", "Письмо для сброса пароля отправлено — проверьте почту.");
+    } catch (err) {
+      // Some Firebase projects have "email enumeration protection" on, which
+      // makes sendPasswordResetEmail silently succeed even for an unknown
+      // address (privacy feature) — so auth/user-not-found may or may not
+      // ever actually surface here depending on the project's settings;
+      // both outcomes are handled gracefully either way.
+      errEl.textContent = err.code === "auth/user-not-found"
+        ? "С таким email аккаунта не нашли."
+        : firebaseAuthErrorText(err);
+      errEl.hidden = false;
+    } finally {
+      btn.disabled = false;
+    }
   });
 
   $("#teamGateSegmented").querySelectorAll(".seg-btn").forEach((btn) => {
@@ -3552,6 +3599,11 @@ function wireEvents() {
   $("#tripHistoryList").addEventListener("click", (e) => {
     const hideBtn = e.target.closest(".trip-history-entry-hide");
     if (hideBtn) hidePersonalGoal(hideBtn.dataset.id);
+  });
+
+  $("#feedLoadMoreBtn").addEventListener("click", () => {
+    feedVisibleCount += FEED_PAGE_SIZE;
+    renderFeed();
   });
 
   $("#feedList").addEventListener("click", (e) => {
