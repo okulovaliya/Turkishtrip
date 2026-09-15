@@ -701,9 +701,13 @@ async function uniqueLoginForTeam(teamId, name) {
 // that account-level mirror was introduced. Without this fallback their
 // avatar/gradient would silently reset to the app default in the new team.
 function seedTeamProfile(accountProfile, displayName, fallbackProfile) {
-  const merged = { ...(fallbackProfile || {}), ...(accountProfile || {}) };
-  const name = displayName || merged.name || "Без имени";
-  return Object.keys(merged).length ? { ...merged, name } : { name };
+  const merged = { name: "Без имени", avatar: "face1", avatarGradient: DEFAULT_AVATAR_GRADIENT, dailyGoal: DAILY_STEP_GOAL };
+  for (const source of [fallbackProfile, accountProfile]) {
+    for (const [key, value] of Object.entries(source || {})) {
+      if (value !== undefined && value !== null && value !== "") merged[key] = value;
+    }
+  }
+  return { ...merged, name: displayName || merged.name };
 }
 
 // Whatever profile is on screen right now (the team someone's switching
@@ -720,14 +724,13 @@ function currentUserFallbackProfile() {
 // just seeded so the NEXT team join doesn't need the fallback again. Only
 // fills in what's missing — never overwrites anything already saved there.
 function backfillAccountProfileUpdates(uid, accountProfile, seededProfile) {
-  if (accountProfile && accountProfile.avatar) return {};
   const updates = {};
-  updates[`users/${uid}/profile`] = {
-    ...(accountProfile || {}),
-    avatar: seededProfile.avatar,
-    avatarGradient: seededProfile.avatarGradient,
-    dailyGoal: seededProfile.dailyGoal
-  };
+  for (const key of ["name", "avatar", "avatarGradient", "dailyGoal"]) {
+    const existing = accountProfile && accountProfile[key];
+    if (existing === undefined || existing === null || existing === "") {
+      updates[`users/${uid}/profile/${key}`] = seededProfile[key];
+    }
+  }
   return updates;
 }
 
