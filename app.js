@@ -701,9 +701,13 @@ async function uniqueLoginForTeam(teamId, name) {
 // that account-level mirror was introduced. Without this fallback their
 // avatar/gradient would silently reset to the app default in the new team.
 function seedTeamProfile(accountProfile, displayName, fallbackProfile) {
-  const merged = { ...(fallbackProfile || {}), ...(accountProfile || {}) };
-  const name = displayName || merged.name || "Без имени";
-  return Object.keys(merged).length ? { ...merged, name } : { name };
+  const merged = { name: "Без имени", avatar: "face1", avatarGradient: DEFAULT_AVATAR_GRADIENT, dailyGoal: DAILY_STEP_GOAL };
+  for (const source of [fallbackProfile, accountProfile]) {
+    for (const [key, value] of Object.entries(source || {})) {
+      if (value !== undefined && value !== null && value !== "") merged[key] = value;
+    }
+  }
+  return { ...merged, name: displayName || merged.name };
 }
 
 // Whatever profile is on screen right now (the team someone's switching
@@ -720,14 +724,13 @@ function currentUserFallbackProfile() {
 // just seeded so the NEXT team join doesn't need the fallback again. Only
 // fills in what's missing — never overwrites anything already saved there.
 function backfillAccountProfileUpdates(uid, accountProfile, seededProfile) {
-  if (accountProfile && accountProfile.avatar) return {};
   const updates = {};
-  updates[`users/${uid}/profile`] = {
-    ...(accountProfile || {}),
-    avatar: seededProfile.avatar,
-    avatarGradient: seededProfile.avatarGradient,
-    dailyGoal: seededProfile.dailyGoal
-  };
+  for (const key of ["name", "avatar", "avatarGradient", "dailyGoal"]) {
+    const existing = accountProfile && accountProfile[key];
+    if (existing === undefined || existing === null || existing === "") {
+      updates[`users/${uid}/profile/${key}`] = seededProfile[key];
+    }
+  }
   return updates;
 }
 
@@ -957,6 +960,7 @@ function applyProfileOverrides() {
     const o = profiles[u.login];
     if (o) {
       if (o.name) u.name = o.name;
+      if (o.nickname) u.nickname = o.nickname;
       if (o.avatar) u.avatar = o.avatar;
       if (o.avatarGradient) u.avatarGradient = o.avatarGradient;
       u.dailyGoal = o.dailyGoal || DAILY_STEP_GOAL;
@@ -1556,10 +1560,82 @@ function archiveTeamHistoryToPersonalRecord() {
   });
 }
 
+let authSubmitting = false;
+let profileSetupAuth = null;
+
+function profileInputErrors(name, nickname, avatar) {
+  return {
+    name: !name || name.length > 40 ? "Введите имя от 1 до 40 символов." : "",
+    nickname: !/^[a-z0-9_]{3,24}$/.test(nickname) ? "От 3 до 24 символов: латинские буквы, цифры и _." : "",
+    avatar: !AVATAR_ICON_KEYS.includes(avatar) ? "Выберите аватар." : ""
+  };
+}
+
+function isProfileComplete(profile) {
+  return !!profile && profile.onboardingCompleted === true &&
+    typeof profile.name === "string" && typeof profile.nickname === "string" &&
+    !Object.values(profileInputErrors(profile.name.trim(), profile.nickname, profile.avatar)).some(Boolean);
+}
+
+function showProfileSetup(uid, email, profile, displayName) {
+  profileSetupAuth = { uid, email };
+  $("#loginScreen").hidden = true;
+  $("#teamGateScreen").hidden = true;
+  $("#appScreen").hidden = true;
+  $("#profileSetupScreen").hidden = false;
+  const name = profile?.name || displayName || "";
+  $("#setupName").value = name === "Без имени" ? "" : name;
+  $("#setupNickname").value = profile?.nickname || "";
+  $("#setupError").hidden = true;
+  for (const key of ["name", "nickname", "avatar"]) document.getElementById(`setup-${key}-error`).hidden = true;
+  const selected = AVATAR_ICON_KEYS.includes(profile?.avatar) ? profile.avatar : "face1";
+  $("#setupAvatarGrid").innerHTML = AVATAR_ICON_KEYS.map((key, i) =>
+    `<label class="setup-avatar"><input type="radio" name="setupAvatar" value="${key}" ${key === selected ? "checked" : ""}><img src="${avatarSrc(key)}" alt="Аватар ${i + 1}"></label>`
+  ).join("");
+}
+
+async function saveOnboardingProfile(uid, name, nickname, avatar) {
+  const errors = profileInputErrors(name, nickname, avatar);
+  if (Object.values(errors).some(Boolean)) throw new Error("Проверьте поля профиля.");
+  const owner = (await db.ref(`nicknames/${nickname}`).once("value")).val();
+  if (owner && owner !== uid) throw new Error("Этот никнейм уже занят. Выберите другой.");
+  const account = (await db.ref(`users/${uid}`).once("value")).val() || {};
+  const profile = { ...seedTeamProfile(account.profile, name), nickname, avatar, onboardingCompleted: true };
+  const updates = {
+    [`users/${uid}/profile`]: profile,
+    [`nicknames/${nickname}`]: uid
+  };
+  const oldNickname = account.profile?.nickname;
+  if (oldNickname && oldNickname !== nickname && /^[a-z0-9_]{3,24}$/.test(oldNickname)) {
+    updates[`nicknames/${oldNickname}`] = null;
+  }
+  // Keep technical member logins and their history intact; update display fields.
+  for (const [teamId, membership] of Object.entries(account.memberships || {})) {
+    for (const key of ["name", "nickname", "avatar"]) {
+      updates[`teams/${teamId}/profiles/${membership.login}/${key}`] = profile[key];
+    }
+  }
+  try {
+    // Server rules check ownership in the same atomic write, including races.
+    await db.ref().update(updates);
+  } catch (error) {
+    const latestOwner = (await db.ref(`nicknames/${nickname}`).once("value")).val();
+    if (latestOwner && latestOwner !== uid) throw new Error("Этот никнейм уже занят. Выберите другой.");
+    throw error;
+  }
+}
+
 // Runs right after a successful Firebase sign-in: figures out which team
 // this uid belongs to and boots straight into the app — or, for a brand-new
 // person with no team yet, shows the create/join screen instead.
 async function enterTeam(uid, email, displayName) {
+  const profile = (await db.ref(`users/${uid}/profile`).once("value")).val();
+  if (!isProfileComplete(profile)) {
+    showProfileSetup(uid, email, profile, displayName);
+    return;
+  }
+  displayName = profile.name;
+  $("#profileSetupScreen").hidden = true;
   pendingAuth = { uid, email, displayName };
   teamGateMode = "login";
   subscribeToPersonalGoals(uid); // once per login session, not per team — see the function comment
@@ -1594,7 +1670,12 @@ async function activateTeam(teamId, login) {
     return;
   }
   if (useCloud && firebase.auth().currentUser) {
-    db.ref(`users/${firebase.auth().currentUser.uid}/lastActiveTeamId`).set(teamId);
+    const uid = firebase.auth().currentUser.uid;
+    const profile = (await db.ref(`users/${uid}/profile`).once("value")).val();
+    if (isProfileComplete(profile)) {
+      await db.ref(teamPath(`profiles/${login}`)).update({ name: profile.name, nickname: profile.nickname, avatar: profile.avatar });
+    }
+    await db.ref(`users/${uid}/lastActiveTeamId`).set(teamId);
   }
   await subscribeToActiveTeam();
   pendingAuth = null;
@@ -1749,6 +1830,8 @@ async function leaveTeam(teamId) {
 }
 
 function logout() {
+  profileSetupAuth = null;
+  $("#profileSetupScreen").hidden = true;
   detachTeamListeners();
   if (useCloud && firebase.auth().currentUser) {
     unsubscribePersonalGoals(firebase.auth().currentUser.uid);
@@ -2955,7 +3038,7 @@ function renderProfile() {
   $("#profileAvatarImg").src = avatarSrc(currentUser.avatar);
   $("#profileAvatar").style.background = gradCss(currentUser.avatarGradient);
   $("#profileName").textContent = currentUser.name;
-  $("#profileLogin").textContent = "@" + currentUser.login;
+  $("#profileLogin").textContent = "@" + (currentUser.nickname || currentUser.login);
   $("#profileGoal").textContent = `цель: ${nf(currentUser.dailyGoal || DAILY_STEP_GOAL)} шагов/день`;
   $("#teamNameLabel").textContent = activeTeamMeta.name || "Команда";
   $("#teamInviteCode").textContent = activeTeamMeta.inviteCode || "——————";
@@ -3279,6 +3362,7 @@ function switchTab(tab) {
 
 // ---------- APP BOOT ----------
 function showApp() {
+  $("#profileSetupScreen").hidden = true;
   $("#loginScreen").hidden = true;
   $("#teamGateScreen").hidden = true;
   $("#appScreen").hidden = false;
@@ -3292,8 +3376,8 @@ function setAuthMode(mode) {
   authMode = mode;
   const registering = mode === "register";
   $("#authModeSegmented").querySelectorAll(".seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
-  $("#nameField").hidden = !registering;
-  $("#nameInput").required = registering;
+  $("#nameField").hidden = true;
+  $("#nameInput").required = false;
   $("#forgotPasswordBtn").hidden = registering; // resetting a password only makes sense once an account already exists
   $("#loginSubmitBtn").textContent = registering ? "Зарегистрироваться" : "Войти";
   $("#loginHint").textContent = registering
@@ -3303,6 +3387,42 @@ function setAuthMode(mode) {
 }
 
 function wireEvents() {
+  $("#setupLogout").addEventListener("click", logout);
+  $("#profileSetupForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!profileSetupAuth) return;
+    const name = $("#setupName").value.trim();
+    const nickname = $("#setupNickname").value.trim().toLowerCase();
+    $("#setupNickname").value = nickname;
+    const avatar = document.querySelector('input[name="setupAvatar"]:checked')?.value;
+    const errors = profileInputErrors(name, nickname, avatar);
+    for (const key of ["name", "nickname", "avatar"]) {
+      const el = document.getElementById(`setup-${key}-error`);
+      el.textContent = errors[key];
+      el.hidden = !errors[key];
+    }
+    if (Object.values(errors).some(Boolean)) return;
+    const { uid, email } = profileSetupAuth;
+    const btn = $("#setupContinue");
+    btn.disabled = true;
+    $("#setupLogout").disabled = true;
+    btn.textContent = "Сохраняем…";
+    $("#setupError").hidden = true;
+    try {
+      await saveOnboardingProfile(uid, name, nickname, avatar);
+      await enterTeam(uid, email, name);
+      profileSetupAuth = null;
+    } catch (error) {
+      $("#profileSetupScreen").hidden = false;
+      $("#setupError").textContent = error.message?.startsWith("Этот никнейм")
+        ? error.message : "Не удалось сохранить или загрузить профиль. Проверьте соединение и попробуйте снова.";
+      $("#setupError").hidden = false;
+    } finally {
+      btn.disabled = false;
+      $("#setupLogout").disabled = false;
+      btn.textContent = "Продолжить";
+    }
+  });
   $("#authModeSegmented").querySelectorAll(".seg-btn").forEach((btn) => {
     btn.addEventListener("click", () => setAuthMode(btn.dataset.mode));
   });
@@ -3316,22 +3436,31 @@ function wireEvents() {
     const registering = authMode === "register";
     btn.disabled = true;
     btn.textContent = registering ? "Регистрируем..." : "Входим...";
+    authSubmitting = true;
     const result = await attemptLogin(email, password, authMode);
-    btn.disabled = false;
     btn.textContent = registering ? "Зарегистрироваться" : "Войти";
     if (!result.ok) {
+      btn.disabled = false;
+      authSubmitting = false;
       $("#loginError").textContent = result.error;
       $("#loginError").hidden = false;
       return;
     }
     $("#loginError").hidden = true;
     if (!useCloud) {
+      authSubmitting = false;
+      btn.disabled = false;
       // Local demo mode already resolved currentUser inside attemptLogin.
       localStorage.setItem("tc_session", currentUser.login);
       showApp();
       return;
     }
-    await enterTeam(result.uid, result.email, name);
+    try {
+      await enterTeam(result.uid, result.email, name);
+    } catch (error) {
+      $("#loginError").textContent = "Не удалось загрузить профиль. Попробуйте войти ещё раз.";
+      $("#loginError").hidden = false;
+    } finally { authSubmitting = false; btn.disabled = false; }
   });
 
   // Firebase Auth already stores/verifies passwords itself (see README —
@@ -3878,10 +4007,14 @@ async function init() {
     // Firebase persists its own session — restore it automatically if present.
     let restoring = false;
     firebase.auth().onAuthStateChanged(async (fbUser) => {
-      if (fbUser && fbUser.email && !currentUser && !restoring) {
+      if (fbUser && fbUser.email && !currentUser && !restoring && !authSubmitting) {
         restoring = true;
-        await enterTeam(fbUser.uid, fbUser.email, "");
-        restoring = false;
+        try {
+          await enterTeam(fbUser.uid, fbUser.email, "");
+        } catch (error) {
+          $("#loginError").textContent = "Не удалось загрузить профиль. Попробуйте войти ещё раз.";
+          $("#loginError").hidden = false;
+        } finally { restoring = false; }
       }
     });
     $("#loginScreen").hidden = false;
