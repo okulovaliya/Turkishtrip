@@ -60,6 +60,23 @@
     </form>
   </section>
 
+  <section id="profileSetupScreen" class="screen login-screen" hidden>
+    <div class="login-hero"><div class="login-emoji">👋</div><h1>Давайте познакомимся</h1>
+      <p class="login-sub">Выберите, как вас увидит команда</p></div>
+    <form id="profileSetupForm" class="login-card" novalidate>
+      <fieldset class="setup-avatars"><legend>Ваш аватар</legend><div id="setupAvatarGrid" class="avatar-grid"></div></fieldset>
+      <p id="setup-avatar-error" class="login-error" hidden></p>
+      <label class="field"><span>Имя</span><input id="setupName" autocomplete="name" maxlength="40" placeholder="Как вас зовут?" aria-describedby="setup-name-error" required></label>
+      <p id="setup-name-error" class="login-error" hidden></p>
+      <label class="field"><span>Никнейм</span><div class="setup-nickname"><span aria-hidden="true">@</span><input id="setupNickname" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="24" placeholder="liya" aria-describedby="setup-nickname-error" required></div></label>
+      <p class="login-hint">3–24 символа: латинские буквы, цифры и _</p>
+      <p id="setup-nickname-error" class="login-error" hidden></p>
+      <p id="setupError" class="login-error" role="alert" hidden></p>
+      <button id="setupContinue" type="submit" class="btn btn-primary btn-block">Продолжить</button>
+      <button id="setupLogout" type="button" class="link-btn">Выйти из аккаунта</button>
+    </form>
+  </section>
+
   <!-- ===== TEAM GATE SCREEN (create or join a team) ===== -->
   <section id="teamGateScreen" class="screen login-screen" hidden>
     <div class="login-bg-blob blob1"></div>
