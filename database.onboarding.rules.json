@@ -1,0 +1,32 @@
+{
+  "rules": {
+    "users": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid",
+        "profile": {
+          ".validate": "auth != null && auth.uid === $uid && (newData.child('onboardingCompleted').val() !== true || (newData.hasChildren(['name', 'nickname', 'avatar']) && newData.parent().parent().parent().child('nicknames').child(newData.child('nickname').val()).val() === $uid))",
+          "name": {
+            ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 40 && newData.val().matches(/.*[^ ].*/)"
+          },
+          "nickname": {
+            ".validate": "newData.isString() && newData.val().matches(/^[a-z0-9_]{3,24}$/)"
+          },
+          "avatar": {
+            ".validate": "newData.isString() && newData.val().matches(/^face([1-9]|1[0-2])$/)"
+          },
+          "onboardingCompleted": {
+            ".validate": "newData.isBoolean()"
+          }
+        }
+      }
+    },
+    "nicknames": {
+      "$nickname": {
+        ".read": "auth != null",
+        ".write": "auth != null && ((!data.exists() && newData.val() === auth.uid) || data.val() === auth.uid)",
+        ".validate": "$nickname.matches(/^[a-z0-9_]{3,24}$/) && newData.isString() && newData.val() === auth.uid && newData.parent().parent().child('users').child(auth.uid).child('profile/nickname').val() === $nickname"
+      }
+    }
+  }
+}

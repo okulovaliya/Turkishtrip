@@ -446,7 +446,7 @@ function startOfDay(d) {
   return x;
 }
 function getTodayStr() {
-  return formatDate(new Date());
+  return new Date(Date.now() + pauseUtcOffset * 60000).toISOString().slice(0, 10);
 }
 function getLastNDates(n) {
   const out = [];
@@ -753,7 +753,7 @@ async function createTeam(uid, teamName, tripDateStr, displayName, destination) 
     migrated: true // brand-new team — nothing legacy to migrate
   };
   updates[`teams/${teamId}/members/${login}`] = { role: "owner", joinedAt: Date.now() };
-  updates[`teams/${teamId}/profiles/${login}`] = seededProfile;
+  updates[`teams/${teamId}/profiles/${login}`] = { ...seededProfile, accountUid: uid };
   updates[`inviteCodes/${inviteCode}`] = teamId;
   updates[`users/${uid}/memberships/${teamId}`] = { login };
   await db.ref().update(updates);
@@ -772,7 +772,7 @@ async function joinTeamByCode(uid, codeRaw, displayName) {
   const seededProfile = seedTeamProfile(accountProfile, displayName, currentUserFallbackProfile());
   const updates = { ...backfillAccountProfileUpdates(uid, accountProfile, seededProfile) };
   updates[`teams/${teamId}/members/${login}`] = { role: "member", joinedAt: Date.now() };
-  updates[`teams/${teamId}/profiles/${login}`] = seededProfile;
+  updates[`teams/${teamId}/profiles/${login}`] = { ...seededProfile, accountUid: uid };
   updates[`users/${uid}/memberships/${teamId}`] = { login };
   await db.ref().update(updates);
   return { teamId, login };
@@ -884,6 +884,8 @@ async function subscribeToActiveTeam() {
 
   db.ref(teamPath("activities")).on("value", (snap) => {
     activities = snap.val() || {};
+    pauseActivitiesLoaded = true;
+    if (!activityWritesPending && currentUser && hasActivityOn(currentUser.login, getTodayStr())) refundPauseForActivity(getTodayStr());
     ensureUserBuckets();
     rerenderCurrentTab();
   });
@@ -903,6 +905,7 @@ async function subscribeToActiveTeam() {
   });
   db.ref(teamPath("profiles")).on("value", (snap) => {
     profiles = snap.val() || {};
+    syncPauseSubscriptions();
     applyProfileOverrides();
     rerenderCurrentTab();
   });
@@ -1133,30 +1136,237 @@ function computeTotals(login) {
   return { totalSteps, totalWorkouts, totalWorkoutMinutes, points, maxDaySteps, maxWorkoutMinutes, workoutTypesUsed, maxWorkoutMinutesByType, entryCount: list.length, agg };
 }
 
+// Pauses belong to an account, not to a team. Reasons deliberately never leave the form.
+let pauseCache = {};
+let pauseListeners = new Map();
+let pauseLoaded = false;
+let pauseBusy = false;
+let activityWritesPending = 0;
+let pauseRefundPending = false;
+let pauseActivitiesLoaded = false;
+let pauseCalendarMonth = null;
+let pauseConfirmationDate = null;
+let pauseUtcOffset = -new Date().getTimezoneOffset();
+
+function pauseOwner(login) {
+  if (!useCloud) return `demo-${login}`;
+  if (currentUser?.login === login) return firebase.auth().currentUser?.uid;
+  return profiles[login]?.accountUid;
+}
+function pauseDatesFor(login) {
+  return RestStreak.dates(pauseCache[pauseOwner(login)]);
+}
+function hasActivityOn(login, date) {
+  const day = dailyAggregates(login)[date];
+  return !!day && (day.steps > 0 || day.workoutMinutes > 0);
+}
+function pauseRemaining() {
+  const month = pauseCache[pauseOwner(currentUser.login)]?.[getTodayStr().slice(0, 7)] || {};
+  return Math.max(0, RestStreak.LIMIT - Object.keys(month).length);
+}
+function detachPauseSubscriptions() {
+  pauseActivitiesLoaded = false;
+  for (const [uid, callback] of pauseListeners) db.ref(`streakPauses/${uid}`).off('value', callback);
+  pauseListeners.clear();
+}
+async function loadMyPauses() {
+  if (!useCloud) {
+    try { pauseCache = JSON.parse(localStorage.getItem('tc_streakPauses') || '{}'); } catch { pauseCache = {}; }
+    pauseLoaded = true;
+    return;
+  }
+  const uid = firebase.auth().currentUser.uid;
+  pauseLoaded = false;
+  try {
+    // Fixed account UTC offset avoids changing the day/quota when travelling.
+    const offset = await db.ref(`users/${uid}/streakUtcOffset`).transaction(value => value === null ? -new Date().getTimezoneOffset() : value);
+    pauseUtcOffset = offset.snapshot.val();
+    const snap = await db.ref(`streakPauses/${uid}`).once('value');
+    pauseCache[uid] = snap.val() || {};
+    pauseLoaded = true;
+  } catch (error) {
+    console.warn('Не удалось загрузить паузы стрика:', error);
+  }
+}
+function syncPauseSubscriptions() {
+  if (!useCloud || !currentUser) return;
+  const ownUid = firebase.auth().currentUser?.uid;
+  const wanted = new Set([ownUid, ...Object.values(profiles).map(profile => profile.accountUid)].filter(Boolean));
+  for (const [uid, callback] of pauseListeners) {
+    if (!wanted.has(uid)) {
+      db.ref(`streakPauses/${uid}`).off('value', callback);
+      pauseListeners.delete(uid);
+    }
+  }
+  for (const uid of wanted) {
+    if (pauseListeners.has(uid)) continue;
+    const callback = snap => {
+      pauseCache[uid] = snap.val() || {};
+      if (uid === ownUid) {
+        pauseLoaded = true;
+        if (pauseActivitiesLoaded && !activityWritesPending && hasActivityOn(currentUser.login, getTodayStr())) refundPauseForActivity(getTodayStr());
+      }
+      rerenderCurrentTab();
+    };
+    pauseListeners.set(uid, callback);
+    db.ref(`streakPauses/${uid}`).on('value', callback, error => {
+      if (uid === ownUid) pauseLoaded = false;
+      console.warn('Паузы стрика недоступны:', error);
+      rerenderCurrentTab();
+    });
+  }
+}
+function pauseBlockReason() {
+  if (!pauseLoaded) return 'Паузы не загружены. Обновите страницу, чтобы повторить загрузку.';
+  const today = getTodayStr();
+  if (hasActivityOn(currentUser.login, today)) return 'Сегодня уже есть активность — пауза не нужна.';
+  if (pauseDatesFor(currentUser.login).has(today)) return '';
+  if (pauseRemaining() === 0) return 'Все 5 пауз использованы. Новые появятся в следующем месяце.';
+  if (computeStreak(currentUser.login).current === 0) return 'Начните серию с активности — затем её можно будет сохранить паузой.';
+  return '';
+}
+async function changeTodayPause(remove, expectedDate = getTodayStr()) {
+  const date = getTodayStr();
+  if (date !== expectedDate) throw new Error('Начался новый день. Откройте форму ещё раз.');
+  if (!remove) {
+    const reason = pauseBlockReason();
+    if (reason) throw new Error(reason);
+  }
+  const uid = pauseOwner(currentUser.login);
+  const monthKey = date.slice(0, 7);
+  const expiresAt = Date.parse(`${date}T00:00:00Z`) + 86400000 - pauseUtcOffset * 60000;
+  if (useCloud) {
+    const result = await db.ref(`streakPauses/${uid}/${monthKey}`).transaction(month =>
+      RestStreak.changeMonth(month, date, remove, expiresAt, firebase.database.ServerValue.TIMESTAMP), undefined, false);
+    if (!result.committed) throw new Error('Все 5 пауз этого месяца уже использованы.');
+    (pauseCache[uid] ||= {})[monthKey] = result.snapshot.val() || {};
+  } else {
+    const months = pauseCache[uid] ||= {};
+    const next = RestStreak.changeMonth(months[monthKey], date, remove, expiresAt, Date.now());
+    if (!next) throw new Error('Все 5 пауз этого месяца уже использованы.');
+    months[monthKey] = next;
+    localStorage.setItem('tc_streakPauses', JSON.stringify(pauseCache));
+  }
+  rerenderCurrentTab();
+}
+async function refundPauseForActivity(date) {
+  if (pauseRefundPending || !currentUser || date !== getTodayStr() || !pauseDatesFor(currentUser.login).has(date)) return;
+  pauseRefundPending = true;
+  try {
+    await changeTodayPause(true, date);
+    showToast('❄️', 'Активность записана — пауза возвращена');
+  } catch (error) {
+    showToast('⚠️', 'Активность записана. Не удалось вернуть паузу — нажмите «Отменить паузу».');
+  } finally { pauseRefundPending = false; }
+}
+async function saveActivityWithPauseRefund(id, entry, patch = null) {
+  const login = currentUser.login;
+  const owner = pauseOwner(login);
+  const date = entry.date;
+  const ref = db.ref(teamPath(`activities/${login}/${id}`));
+  activityWritesPending++;
+  try {
+    if (patch) await ref.update(patch);
+    else await ref.set(entry);
+    if (currentUser && pauseOwner(currentUser.login) === owner) await refundPauseForActivity(date);
+  } catch (error) { reportActivitySaveError(error); }
+  finally { activityWritesPending--; }
+}
+function reportActivitySaveError(error) {
+  console.warn('Ошибка сохранения активности:', error);
+  showToast('⚠️', 'Не удалось сохранить активность. Проверьте соединение.');
+}
+function renderPauseCard() {
+  const today = getTodayStr();
+  const paused = pauseDatesFor(currentUser.login).has(today);
+  const active = hasActivityOn(currentUser.login, today);
+  const blocked = pauseBlockReason();
+  $('#pauseBalance').textContent = pauseLoaded ? `❄️ ${pauseRemaining()} из 5` : 'Загрузка…';
+  $('#openPauseBtn').hidden = paused;
+  $('#openPauseBtn').disabled = pauseBusy || !!blocked;
+  $('#cancelPauseBtn').hidden = !paused;
+  $('#cancelPauseBtn').disabled = pauseBusy;
+  $('#pauseStatus').textContent = paused
+    ? (active ? 'Сегодня есть активность. Отмените паузу, чтобы вернуть её в остаток.' : 'Сегодня день отдыха. Стрик сохранён.')
+    : blocked || 'Пауза сохраняет серию, но не добавляет дней и баллов.';
+  if (paused && !active) $('#homeStreak').textContent = `❄️ ${computeStreak(currentUser.login).current} ${daysWord(computeStreak(currentUser.login).current)} · пауза`;
+  const month = pauseCalendarMonth || today.slice(0, 7);
+  const first = new Date(`${month}-01T00:00:00Z`);
+  const count = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
+  $('#pauseMonthLabel').textContent = first.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  $('#pauseNextMonth').disabled = month >= today.slice(0, 7);
+  const cells = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map(day => `<span class="pause-weekday">${day}</span>`);
+  for (let i = 0; i < (first.getUTCDay() + 6) % 7; i++) cells.push('<span></span>');
+  const rests = pauseDatesFor(currentUser.login);
+  const agg = dailyAggregates(currentUser.login);
+  for (let day = 1; day <= count; day++) {
+    const date = `${month}-${pad(day)}`;
+    const active = date <= today && agg[date] && (agg[date].steps > 0 || agg[date].workoutMinutes > 0);
+    const rest = date <= today && !active && rests.has(date);
+    const label = active ? 'Активность' : rest ? 'День отдыха' : date > today ? 'Впереди' : 'Без активности';
+    cells.push(`<div class="pause-day ${active ? 'active' : rest ? 'rest' : ''} ${date === today ? 'today' : ''} ${date > today ? 'future' : ''}" aria-label="${date}: ${label}"><span>${day}</span><span aria-hidden="true">${active ? '🔥' : rest ? '❄️' : '·'}</span></div>`);
+  }
+  $('#pauseCalendar').innerHTML = cells.join('');
+}
+function wirePauseEvents() {
+  for (const [id, direction] of [['pausePrevMonth', -1], ['pauseNextMonth', 1]]) {
+    $('#' + id).addEventListener('click', () => {
+      const date = new Date(`${pauseCalendarMonth || getTodayStr().slice(0, 7)}-01T00:00:00Z`);
+      date.setUTCMonth(date.getUTCMonth() + direction);
+      pauseCalendarMonth = date.toISOString().slice(0, 7);
+      renderPauseCard();
+    });
+  }
+  $('#openPauseBtn').addEventListener('click', () => {
+    $('#pauseForm').reset();
+    $('#pauseOtherField').hidden = true;
+    $('#pauseError').hidden = true;
+    pauseConfirmationDate = getTodayStr();
+    $('#pauseConfirmText').textContent = `Сегодня будет день отдыха. Стрик сохранится, останется ${Math.max(0, pauseRemaining() - 1)} из 5 пауз в этом месяце.`;
+    openModal('pauseModal');
+    $('#pauseReason').focus();
+  });
+  $('#pauseReason').addEventListener('change', () => {
+    $('#pauseOtherField').hidden = $('#pauseReason').value !== 'other';
+    if ($('#pauseOtherField').hidden) $('#pauseOther').value = '';
+  });
+  $('#pauseForm').addEventListener('submit', async event => {
+    event.preventDefault();
+    if (pauseBusy || !['energy', 'unwell', 'recovery', 'other'].includes($('#pauseReason').value)) return;
+    pauseBusy = true;
+    $('#confirmPauseBtn').disabled = true;
+    $('#pauseError').hidden = true;
+    try {
+      await changeTodayPause(false, pauseConfirmationDate);
+      // Covers an activity committed on another device while the transaction ran.
+      if (hasActivityOn(currentUser.login, getTodayStr())) await refundPauseForActivity(getTodayStr());
+      closeModal('pauseModal');
+      showToast('❄️', 'День отдыха сохранён');
+    } catch (error) {
+      $('#pauseError').textContent = error.code ? 'Не удалось сохранить паузу. Проверьте соединение и правила Firebase.' : error.message;
+      $('#pauseError').hidden = false;
+    } finally {
+      pauseBusy = false;
+      $('#confirmPauseBtn').disabled = false;
+      if (currentUser) renderPauseCard();
+    }
+  });
+  $('#cancelPauseBtn').addEventListener('click', async () => {
+    if (pauseBusy) return;
+    pauseBusy = true;
+    renderPauseCard();
+    try { await changeTodayPause(true); showToast('❄️', 'Пауза возвращена'); }
+    catch { showToast('⚠️', 'Не удалось отменить паузу. Проверьте соединение.'); }
+    finally { pauseBusy = false; if (currentUser) renderPauseCard(); }
+  });
+  // Refresh when an open tab crosses midnight or the month boundary.
+  setInterval(() => { if (currentUser && currentTab === 'home') renderHome(); }, 60000);
+}
+
 function computeStreak(login) {
   const agg = dailyAggregates(login);
-  const activeDates = new Set(Object.keys(agg).filter((d) => agg[d].steps > 0 || agg[d].workoutMinutes > 0));
-  // current streak: walk back from today
-  let current = 0;
-  let cursor = startOfDay(new Date());
-  // allow streak to still count "today" as pending — start check from today, if missing today, try from yesterday
-  if (!activeDates.has(formatDate(cursor))) {
-    cursor.setDate(cursor.getDate() - 1);
-  }
-  while (activeDates.has(formatDate(cursor))) {
-    current += 1;
-    cursor.setDate(cursor.getDate() - 1);
-  }
-  // best streak across all history
-  const sortedDates = Array.from(activeDates).sort();
-  let best = 0, run = 0, prev = null;
-  sortedDates.forEach((ds) => {
-    const d = new Date(ds + "T00:00:00");
-    if (prev && (d - prev) / 86400000 === 1) run += 1; else run = 1;
-    if (run > best) best = run;
-    prev = d;
-  });
-  return { current, best: Math.max(best, current) };
+  const active = Object.keys(agg).filter(date => agg[date].steps > 0 || agg[date].workoutMinutes > 0);
+  return RestStreak.compute(active, pauseDatesFor(login), getTodayStr());
 }
 
 function computeTeamTotals() {
@@ -1196,7 +1406,7 @@ function computeAchievements(login) {
 // reading it off the module-level `activities` cache — needed by leaveTeam,
 // which can act on a team that isn't the one currently loaded into that
 // cache (see summary at its call site).
-function summarizeActivityEntries(entriesObj) {
+function summarizeActivityEntries(entriesObj, restDates = new Set()) {
   const list = Object.values(entriesObj || {});
   let totalSteps = 0, totalWorkouts = 0, totalWorkoutMinutes = 0, points = 0, maxWorkoutMinutes = 0;
   const byDate = {};
@@ -1220,13 +1430,7 @@ function summarizeActivityEntries(entriesObj) {
   });
   const maxDaySteps = Object.values(stepsByDate).reduce((m, v) => Math.max(m, v), 0);
   const activeDates = Object.keys(byDate).filter((d) => byDate[d] > 0).sort();
-  let best = 0, run = 0, prev = null;
-  activeDates.forEach((ds) => {
-    const d = new Date(ds + "T00:00:00");
-    if (prev && (d - prev) / 86400000 === 1) run += 1; else run = 1;
-    if (run > best) best = run;
-    prev = d;
-  });
+  const best = RestStreak.compute(activeDates, restDates, getTodayStr()).best;
   return { totalSteps, totalWorkouts, totalWorkoutMinutes, points, bestStreak: best, entryCount: list.length, maxDaySteps, maxWorkoutMinutes, workoutTypesUsed, maxWorkoutMinutesByType };
 }
 
@@ -1493,6 +1697,7 @@ async function attemptLogin(emailRaw, password, mode) {
 // needed now that different logins on the same page can mean different
 // teams, so a stale listener from a previous session can't leak data across.
 function detachTeamListeners() {
+  detachPauseSubscriptions();
   if (!useCloud || !db) return;
   ["activities", "comments", "reactions", "profiles", "meta", "members", "history", "posts"].forEach((node) => {
     db.ref(teamPath(node)).off();
@@ -1673,10 +1878,11 @@ async function activateTeam(teamId, login) {
     const uid = firebase.auth().currentUser.uid;
     const profile = (await db.ref(`users/${uid}/profile`).once("value")).val();
     if (isProfileComplete(profile)) {
-      await db.ref(teamPath(`profiles/${login}`)).update({ name: profile.name, nickname: profile.nickname, avatar: profile.avatar });
+      await db.ref(teamPath(`profiles/${login}`)).update({ name: profile.name, nickname: profile.nickname, avatar: profile.avatar, accountUid: uid });
     }
     await db.ref(`users/${uid}/lastActiveTeamId`).set(teamId);
   }
+  await loadMyPauses();
   await subscribeToActiveTeam();
   pendingAuth = null;
   showApp();
@@ -1757,7 +1963,7 @@ async function leaveTeam(teamId) {
       db.ref(`teams/${teamId}/activities/${login}`).once("value"),
       db.ref(`teams/${teamId}/profiles/${login}`).once("value")
     ]);
-    const snap = summarizeActivityEntries(actSnap.val());
+    const snap = summarizeActivityEntries(actSnap.val(), pauseDatesFor(currentUser.login));
     if (snap.entryCount > 0) {
       const myName = (profSnap.val() && profSnap.val().name) || login;
       const cycleId = `left-${teamId}-${Date.now()}`;
@@ -1830,6 +2036,9 @@ async function leaveTeam(teamId) {
 }
 
 function logout() {
+  pauseCache = {};
+  pauseLoaded = false;
+  pauseCalendarMonth = null;
   profileSetupAuth = null;
   $("#profileSetupScreen").hidden = true;
   detachTeamListeners();
@@ -1861,6 +2070,7 @@ function renderHome() {
     ? `🔥 ${streak.current} ${daysWord(streak.current)} подряд`
     : "Начни серию сегодня!";
 
+  renderPauseCard();
   const isGoalCompleted = activeTeamMeta.status === "completed";
   $("#editTripBtn").hidden = isGoalCompleted || !isTeamOwner();
   if (isGoalCompleted) {
@@ -1989,8 +2199,9 @@ function updateStepsEntry(id, steps, date, note) {
   entry.points = pointsForSteps(steps);
   entry.date = date || entry.date;
   entry.note = note || null;
-  if (useCloud) { db.ref(teamPath(`activities/${currentUser.login}/${id}`)).update({ steps: entry.steps, points: entry.points, date: entry.date, note: entry.note }); mirrorEntryToOtherTeams(id, entry); }
+  if (useCloud) { saveActivityWithPauseRefund(id, entry, { steps: entry.steps, points: entry.points, date: entry.date, note: entry.note }); mirrorEntryToOtherTeams(id, entry); }
   else persistLocal();
+  if (!useCloud) refundPauseForActivity(entry.date);
   showToast("✏️", "Запись обновлена!");
   renderHome();
 }
@@ -2005,7 +2216,7 @@ function updateWorkoutEntry(id, type, minutes, calories, date, note) {
   entry.date = date || entry.date;
   entry.note = note || null;
   if (useCloud) {
-    db.ref(teamPath(`activities/${currentUser.login}/${id}`)).update({
+    saveActivityWithPauseRefund(id, entry, {
       workoutType: entry.workoutType,
       workoutMinutes: entry.workoutMinutes,
       workoutCalories: entry.workoutCalories,
@@ -2017,6 +2228,7 @@ function updateWorkoutEntry(id, type, minutes, calories, date, note) {
   } else {
     persistLocal();
   }
+  if (!useCloud) refundPauseForActivity(entry.date);
   showToast("✏️", "Запись обновлена!");
   renderHome();
 }
@@ -2976,7 +3188,7 @@ function renderTeam() {
       <div class="avatar" style="background:${gradCss(u.avatarGradient)}"><img class="avatar-icon-img" src="${avatarSrc(u.avatar)}" alt=""></div>
       <div class="tr-info">
         <div class="tr-name">${u.name}</div>
-        <div class="tr-sub">${nf(t.totalSteps)} шагов · ${t.totalWorkouts} тренировок · 🔥${s.current}</div>
+        <div class="tr-sub">${nf(t.totalSteps)} шагов · ${t.totalWorkouts} тренировок · ${pauseDatesFor(u.login).has(getTodayStr()) && !hasActivityOn(u.login, getTodayStr()) ? "❄️" : "🔥"}${s.current}</div>
       </div>
       <div class="tr-points">${nf(t.points)}</div>`;
     wrap.appendChild(row);
@@ -3195,8 +3407,9 @@ function addStepsEntry(steps, date, note) {
   const entry = { id, date: date || getTodayStr(), type: "steps", steps, points: pointsForSteps(steps), note: note || null, ts: Date.now() };
   if (!activities[currentUser.login]) activities[currentUser.login] = {};
   activities[currentUser.login][id] = entry;
-  if (useCloud) { db.ref(teamPath(`activities/${currentUser.login}/${id}`)).set(entry); mirrorEntryToOtherTeams(id, entry); }
+  if (useCloud) { saveActivityWithPauseRefund(id, entry); mirrorEntryToOtherTeams(id, entry); }
   else persistLocal();
+  if (!useCloud) refundPauseForActivity(entry.date);
   afterAdd("steps", before);
 }
 function addWorkoutEntry(type, minutes, calories, date, note) {
@@ -3205,8 +3418,9 @@ function addWorkoutEntry(type, minutes, calories, date, note) {
   const entry = { id, date: date || getTodayStr(), type: "workout", workoutType: type, workoutMinutes: minutes, workoutCalories: calories || null, points: pointsForWorkout(minutes, type), note: note || null, ts: Date.now() };
   if (!activities[currentUser.login]) activities[currentUser.login] = {};
   activities[currentUser.login][id] = entry;
-  if (useCloud) { db.ref(teamPath(`activities/${currentUser.login}/${id}`)).set(entry); mirrorEntryToOtherTeams(id, entry); }
+  if (useCloud) { saveActivityWithPauseRefund(id, entry); mirrorEntryToOtherTeams(id, entry); }
   else persistLocal();
+  if (!useCloud) refundPauseForActivity(entry.date);
   afterAdd("workout", before);
 }
 
@@ -3284,7 +3498,7 @@ async function refreshOtherTeamsLiveStats() {
   if (!others.length) { otherTeamsLiveStats = {}; return; }
   const entries = await Promise.all(others.map(async ({ teamId, login }) => {
     const snap = await db.ref(`teams/${teamId}/activities/${login}`).once("value");
-    return [teamId, summarizeActivityEntries(snap.val())];
+    return [teamId, summarizeActivityEntries(snap.val(), pauseDatesFor(currentUser.login))];
   }));
   const next = {};
   entries.forEach(([teamId, stats]) => { next[teamId] = stats; });
@@ -3325,7 +3539,10 @@ function initTheme() {
 
 // ---------- MODALS ----------
 function openModal(id) { $("#" + id).hidden = false; }
-function closeModal(id) { $("#" + id).hidden = true; }
+function closeModal(id) {
+  $("#" + id).hidden = true;
+  if (id === "pauseModal") $("#pauseForm").reset();
+}
 
 // Full-screen viewer for a feed post's photo, opened by clicking the (already
 // loaded/uncropped-cached) thumbnail in the feed — the thumbnail itself uses
@@ -3362,6 +3579,10 @@ function switchTab(tab) {
 
 // ---------- APP BOOT ----------
 function showApp() {
+  if (!useCloud && !pauseLoaded) {
+    try { pauseCache = JSON.parse(localStorage.getItem("tc_streakPauses") || "{}"); } catch { pauseCache = {}; }
+    pauseLoaded = true;
+  }
   $("#profileSetupScreen").hidden = true;
   $("#loginScreen").hidden = true;
   $("#teamGateScreen").hidden = true;
@@ -3387,6 +3608,7 @@ function setAuthMode(mode) {
 }
 
 function wireEvents() {
+  wirePauseEvents();
   $("#setupLogout").addEventListener("click", logout);
   $("#profileSetupForm").addEventListener("submit", async (event) => {
     event.preventDefault();

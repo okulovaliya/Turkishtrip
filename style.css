@@ -1586,3 +1586,31 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .setup-nickname { display: flex; align-items: center; gap: 8px; }
 .setup-nickname input { min-width: 0; flex: 1; }
 #profileSetupScreen .login-hero { margin-top: 12px; }
+
+/* Streak pause and monthly activity calendar */
+.pause-card { margin: 0 20px 18px; padding: 16px; border: 1px solid var(--card-border); border-radius: 20px; background: var(--bg-2); }
+.pause-heading, .pause-month-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pause-heading { list-style: none; cursor: pointer; min-height: 24px; }
+.pause-heading::-webkit-details-marker { display: none; }
+.pause-heading .card-title { margin: 0; }
+.pause-heading #pauseBalance { margin-left: auto; }
+.pause-chevron { width: 8px; height: 8px; margin: 0 3px 4px 6px; border-right: 1.5px solid var(--text-dim); border-bottom: 1.5px solid var(--text-dim); transform: rotate(45deg); }
+.pause-card[open] .pause-chevron { transform: rotate(225deg); margin-bottom: 0; }
+.pause-heading:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 5px; border-radius: 4px; }
+.pause-card button, #pauseModal button, #pauseModal select, #pauseModal textarea { font-family: inherit; }
+#pauseModal .modal-title { margin-top: 0; }
+.btn-pause { background: linear-gradient(135deg, #C4E7F2, #A5D3E6); color: #183B49; }
+.btn-pause:disabled { opacity: .5; cursor: default; }
+#pauseBalance { font-size: 12px; white-space: nowrap; }
+.pause-month-nav { margin: 10px 0; font-size: 14px; }
+.pause-calendar { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; text-align: center; }
+.pause-day { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-height: 44px; border-radius: 10px; font-size: 12px; }
+.pause-day.active { background: rgba(255, 122, 89, .12); }
+.pause-day.rest { background: rgba(80, 190, 230, .15); }
+.pause-day.today { outline: 1px solid currentColor; outline-offset: -1px; }
+.pause-weekday, .pause-hint { font-size: 12px; color: var(--text-dim); }
+.pause-hint { line-height: 1.5; margin: 10px 0; }
+.pause-calendar .future { opacity: .4; }
+#pauseOther { min-height: 70px; resize: vertical; }
+#cancelPauseBtn { display: block; margin: 10px auto 0; }
+#cancelPauseBtn[hidden] { display: none; }
