@@ -146,6 +146,16 @@
         </button>
       </header>
 
+      <details class="pause-card" aria-labelledby="pauseHeading">
+        <summary class="pause-heading"><span id="pauseHeading" class="card-title">Ритм активности</span><span id="pauseBalance" aria-live="polite"></span><span class="pause-chevron" aria-hidden="true"></span></summary>
+        <div class="pause-month-nav"><button type="button" class="link-btn" id="pausePrevMonth" aria-label="Предыдущий месяц">←</button><span id="pauseMonthLabel"></span><button type="button" class="link-btn" id="pauseNextMonth" aria-label="Следующий месяц">→</button></div>
+        <div id="pauseCalendar" class="pause-calendar" aria-label="Календарь активности"></div>
+        <p class="pause-hint">🔥 Активность · ❄️ День отдыха</p>
+        <p id="pauseStatus" class="pause-hint" aria-live="polite"></p>
+        <button type="button" id="openPauseBtn" class="btn btn-pause btn-block">Поставить стрик на паузу</button>
+        <button type="button" id="cancelPauseBtn" class="link-btn" hidden>Отменить сегодняшнюю паузу</button>
+      </details>
+
       <div class="motivation-banner" id="dailyMotivation">
         <span class="motivation-emoji" id="motivationEmoji">🍹</span>
         <span class="motivation-text" id="motivationText">Вы на один день ближе к отпуску!</span>
@@ -545,6 +555,24 @@
   </section>
 
   <!-- STEPS MODAL -->
+  <div class="modal-backdrop" id="pauseModal" hidden>
+    <form id="pauseForm" class="modal" role="dialog" aria-modal="true" aria-labelledby="pauseModalTitle">
+      <h2 class="modal-title" id="pauseModalTitle">❄️ День отдыха</h2>
+      <p id="pauseConfirmText" class="pause-hint"></p>
+      <label class="field"><span>Причина</span><select id="pauseReason" class="modal-input" required>
+        <option value="">Выберите причину</option>
+        <option value="energy">Низкая энергия</option>
+        <option value="unwell">Плохое самочувствие</option>
+        <option value="recovery">Восстановительный день</option>
+        <option value="other">Другое</option>
+      </select></label>
+      <label class="field" id="pauseOtherField" hidden><span>Расскажите, если хочется</span><textarea id="pauseOther" class="modal-input" maxlength="300" placeholder="Необязательно"></textarea></label>
+      <p class="pause-hint">Причина и текст не сохраняются и не видны команде.</p>
+      <p id="pauseError" class="login-error" role="alert" hidden></p>
+      <div class="modal-actions"><button type="button" class="btn btn-secondary" data-close="pauseModal">Назад</button><button type="submit" id="confirmPauseBtn" class="btn btn-primary">Подтвердить</button></div>
+    </form>
+  </div>
+
   <div class="modal-backdrop" id="stepsModal" hidden>
     <div class="modal">
       <div class="modal-title" id="stepsModalTitle">Добавить шаги</div>
@@ -801,6 +829,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
 <script src="firebase-config.js"></script>
+<script src="streak-pause.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
