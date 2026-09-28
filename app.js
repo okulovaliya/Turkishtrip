@@ -184,7 +184,7 @@ const FALLBACK_USERS = [
 ];
 
 // Avatar keys -> custom PNG sticker (stored in /avatars). Replaces the earlier emoji/SVG-icon avatars.
-const AVATAR_ICON_KEYS = ["face1", "face2", "face3", "face4", "face5", "face6", "face7", "face8", "face9", "face10", "face11", "face12"];
+const AVATAR_ICON_KEYS = ["face1", "face2", "face3", "face4", "face5", "face6", "face7", "face12", "face8", "face9", "face10", "face11", "face13", "face14", "face15"];
 function avatarSrc(key) {
   const safe = AVATAR_ICON_KEYS.includes(key) ? key : "face1";
   return `avatars/${safe}.png`;
