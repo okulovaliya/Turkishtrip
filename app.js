@@ -1641,15 +1641,51 @@ function firebaseAuthErrorText(err) {
   return (err && map[err.code]) || "Не удалось войти. Попробуйте ещё раз.";
 }
 
-// Only explicit credential submission can open a session. No passwordless fallback.
+// Seven days from Firebase's original sign-in time, not from the last visit.
+const AUTH_SESSION_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
 let authSessionReady = false;
+let authSessionExpiresAt = 0;
+let authSessionTimer = null;
+
+function sessionExpiresAt(authTime) {
+  const signedInAt = Date.parse(authTime);
+  return Number.isFinite(signedInAt) ? signedInAt + AUTH_SESSION_MAX_AGE : 0;
+}
+function checkSessionExpiry() {
+  if (authSessionExpiresAt && Date.now() >= authSessionExpiresAt) logout();
+}
+async function validateAuthSession(user) {
+  // A forced refresh also rejects revoked/disabled accounts when restoring.
+  const token = await user.getIdTokenResult(true);
+  const expiresAt = sessionExpiresAt(token.authTime);
+  if (expiresAt <= Date.now()) return false;
+  clearTimeout(authSessionTimer);
+  authSessionExpiresAt = expiresAt;
+  authSessionTimer = setTimeout(checkSessionExpiry, Math.min(expiresAt - Date.now(), AUTH_SESSION_MAX_AGE));
+  return true;
+}
 async function prepareAuthSession() {
   authSessionReady = false;
-  if (!useCloud) return;
+  if (!useCloud) return null;
   const auth = firebase.auth();
-  await auth.signOut(); // Clear sessions retained by older app versions.
-  await auth.setPersistence(firebase.auth.Auth.Persistence.NONE);
+  await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
+  const user = await new Promise((resolve, reject) => {
+    const unsubscribe = auth.onAuthStateChanged(user => { unsubscribe(); resolve(user); }, reject);
+  });
+  if (user) {
+    try {
+      if (await validateAuthSession(user)) {
+        authSessionReady = true;
+        return user;
+      }
+    } catch (error) {
+      // Network failures retain the stored session for a later retry, but never open the app.
+      if (!["auth/user-disabled", "auth/user-token-expired", "auth/invalid-user-token"].includes(error.code)) throw error;
+    }
+    await auth.signOut();
+  }
   authSessionReady = true;
+  return null;
 }
 
 async function attemptLogin(emailRaw, password, mode) {
@@ -1668,6 +1704,7 @@ async function attemptLogin(emailRaw, password, mode) {
     if (mode === "register") {
       try {
         const cred = await firebase.auth().createUserWithEmailAndPassword(email, password);
+        if (!await validateAuthSession(cred.user)) throw new Error("Session expired");
         return { ok: true, uid: cred.user.uid, email: cred.user.email, isNew: true };
       } catch (signUpErr) {
         if (signUpErr.code === "auth/email-already-in-use") {
@@ -1679,6 +1716,7 @@ async function attemptLogin(emailRaw, password, mode) {
 
     try {
       const cred = await firebase.auth().signInWithEmailAndPassword(email, password);
+      if (!await validateAuthSession(cred.user)) throw new Error("Session expired");
       return { ok: true, uid: cred.user.uid, email: cred.user.email, isNew: false };
     } catch (signInErr) {
       const notRegistered = ["auth/user-not-found", "auth/invalid-credential", "auth/wrong-password"].includes(signInErr.code);
@@ -2038,6 +2076,8 @@ async function leaveTeam(teamId) {
 }
 
 function logout() {
+  clearTimeout(authSessionTimer);
+  authSessionExpiresAt = 0;
   pauseCache = {};
   pauseLoaded = false;
   pauseCalendarMonth = null;
@@ -2047,7 +2087,7 @@ function logout() {
   if (useCloud && firebase.auth().currentUser) {
     unsubscribePersonalGoals(firebase.auth().currentUser.uid);
     unsubscribeRecipes();
-    firebase.auth().signOut();
+    firebase.auth().signOut().catch(error => console.warn("Не удалось завершить сессию:", error));
   }
   currentUser = null;
   pendingAuth = null;
@@ -4219,8 +4259,12 @@ async function init() {
   $("#appScreen").hidden = true;
   $("#loginHint").textContent = "Введите email и пароль для входа.";
   try {
-    await prepareAuthSession();
+    const restoredUser = await prepareAuthSession();
     if (!useCloud) throw new Error("Firebase Auth unavailable");
+    if (restoredUser) await enterTeam(restoredUser.uid, restoredUser.email, "");
+    firebase.auth().onAuthStateChanged(user => {
+      if (!user && (currentUser || pendingAuth || profileSetupAuth)) logout();
+    });
   } catch (error) {
     $("#loginError").textContent = "Не удалось подключить сервис входа. Проверьте соединение и обновите страницу.";
     $("#loginError").hidden = false;
@@ -4229,6 +4273,11 @@ async function init() {
   }
 
 }
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) checkSessionExpiry();
+});
+window.addEventListener("pageshow", checkSessionExpiry);
 
 document.addEventListener("DOMContentLoaded", async () => {
   try {

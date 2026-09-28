@@ -1614,3 +1614,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 #pauseOther { min-height: 70px; resize: vertical; }
 #cancelPauseBtn { display: block; margin: 10px auto 0; }
 #cancelPauseBtn[hidden] { display: none; }
+
+/* Supplied RUNA artwork above the login form. */
+.login-brand-logo { display: block; width: 220px; max-width: 100%; height: auto; margin: 0 auto; }
+[data-theme="light"] .login-brand-logo { filter: invert(1); }
