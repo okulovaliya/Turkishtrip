@@ -1641,25 +1641,27 @@ function firebaseAuthErrorText(err) {
   return (err && map[err.code]) || "Не удалось войти. Попробуйте ещё раз.";
 }
 
-// Local (non-cloud) demo mode never had real accounts — it's a fallback for
-// trying the app before Firebase is configured, so it still only supports
-// the 3 names the app launched with, matched by email prefix, on one device.
-//
-// mode is "login" or "register" — set explicitly by the Войти/Регистрация
-// toggle on the login screen, rather than guessed by trying one then falling
-// back to the other. That fallback used to mean a mistyped email on the
-// "Войти" button would silently create a brand-new account instead of
-// showing an error — this way "Войти" only ever signs in, and "Регистрация"
-// only ever creates a new account.
-async function attemptLogin(emailRaw, password, mode) {
-  const email = emailRaw.trim().toLowerCase();
+// Only explicit credential submission can open a session. No passwordless fallback.
+let authSessionReady = false;
+async function prepareAuthSession() {
+  authSessionReady = false;
+  if (!useCloud) return;
+  const auth = firebase.auth();
+  await auth.signOut(); // Clear sessions retained by older app versions.
+  await auth.setPersistence(firebase.auth.Auth.Persistence.NONE);
+  authSessionReady = true;
+}
 
+async function attemptLogin(emailRaw, password, mode) {
+  const email = typeof emailRaw === "string" ? emailRaw.trim().toLowerCase() : "";
+  if (!email || typeof password !== "string" || !password.trim()) {
+    return { ok: false, error: "Введите email и пароль." };
+  }
   if (!useCloud) {
-    const login = email.split("@")[0];
-    const user = USERS.find((u) => u.login.toLowerCase() === login);
-    if (!user) return { ok: false, error: "В демо-режиме без Firebase доступны только исходные участницы (tanya/lilu/nastya@turkeytrip.app)." };
-    currentUser = user;
-    return { ok: true, isNew: false };
+    return { ok: false, error: "Сервис входа недоступен. Проверьте соединение и обновите страницу." };
+  }
+  if (!authSessionReady) {
+    return { ok: false, error: "Сервис входа ещё не готов. Обновите страницу и попробуйте снова." };
   }
 
   try {
@@ -3669,14 +3671,6 @@ function wireEvents() {
       return;
     }
     $("#loginError").hidden = true;
-    if (!useCloud) {
-      authSubmitting = false;
-      btn.disabled = false;
-      // Local demo mode already resolved currentUser inside attemptLogin.
-      localStorage.setItem("tc_session", currentUser.login);
-      showApp();
-      return;
-    }
     try {
       await enterTeam(result.uid, result.email, name);
     } catch (error) {
@@ -4218,38 +4212,34 @@ async function init() {
   initFirebaseApp();
   wireEvents();
 
-  const hint = $("#loginHint");
-  if (hint) {
-    hint.textContent = useCloud
-      ? "Введите email и пароль, которые вы уже использовали."
-      : "⚠️ Firebase не настроен — доступны только исходные участницы, без пароля, только на этом устройстве (демо-режим).";
-  }
-
-  if (useCloud && typeof firebase !== "undefined" && firebase.auth) {
-    // Firebase persists its own session — restore it automatically if present.
-    let restoring = false;
-    firebase.auth().onAuthStateChanged(async (fbUser) => {
-      if (fbUser && fbUser.email && !currentUser && !restoring && !authSubmitting) {
-        restoring = true;
-        try {
-          await enterTeam(fbUser.uid, fbUser.email, "");
-        } catch (error) {
-          $("#loginError").textContent = "Не удалось загрузить профиль. Попробуйте войти ещё раз.";
-          $("#loginError").hidden = false;
-        } finally { restoring = false; }
-      }
-    });
-    $("#loginScreen").hidden = false;
-    return;
-  }
-
-  // Local demo mode: no Firebase, fall back to remembering the last login on this device.
-  const savedLogin = localStorage.getItem("tc_session");
-  if (savedLogin) {
-    const u = USERS.find((x) => x.login === savedLogin);
-    if (u) { currentUser = u; showApp(); return; }
-  }
+  const btn = $("#loginSubmitBtn");
+  btn.disabled = true;
+  try { localStorage.removeItem("tc_session"); } catch { /* Storage may be blocked. */ }
   $("#loginScreen").hidden = false;
+  $("#appScreen").hidden = true;
+  $("#loginHint").textContent = "Введите email и пароль для входа.";
+  try {
+    await prepareAuthSession();
+    if (!useCloud) throw new Error("Firebase Auth unavailable");
+  } catch (error) {
+    $("#loginError").textContent = "Не удалось подключить сервис входа. Проверьте соединение и обновите страницу.";
+    $("#loginError").hidden = false;
+  } finally {
+    btn.disabled = !authSessionReady;
+  }
+
 }
 
-document.addEventListener("DOMContentLoaded", init);
+document.addEventListener("DOMContentLoaded", async () => {
+  try {
+    await init();
+  } catch (error) {
+    console.warn("Ошибка запуска приложения:", error);
+    $("#loginScreen").hidden = false;
+    $("#loginSubmitBtn").disabled = true;
+    $("#loginError").textContent = "Не удалось загрузить приложение. Проверьте соединение и обновите страницу.";
+    $("#loginError").hidden = false;
+  } finally {
+    window.dispatchEvent(new Event("app-ready"));
+  }
+});
