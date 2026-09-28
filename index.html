@@ -6,6 +6,12 @@
 <title>Squad Challenge 🎯</title>
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="apple-touch-icon" href="favicon.svg">
+<link rel="preload" as="image" href="welcome.png">
+<style>
+  #welcomeScreen { position: fixed; inset: 0; z-index: 1000; display: flex; justify-content: center; background: #BDBDB6; }
+  #welcomeScreen[hidden] { display: none; }
+  #welcomeScreen img { display: block; width: 100%; max-width: 460px; height: 100%; object-fit: cover; object-position: center; }
+</style>
 <link rel="stylesheet" href="style.css">
 <script>
   // Applied before the stylesheet paints anything, so a returning person
@@ -22,7 +28,37 @@
 </head>
 <body>
 
-<div class="phone">
+<div id="welcomeScreen" role="status" aria-label="Загрузка приложения">
+  <img src="welcome.png" alt="RUNA" fetchpriority="high">
+</div>
+<script>
+  (function () {
+    var started = Date.now();
+    var finished = false;
+    function revealLogin(timedOut) {
+      if (finished) return;
+      finished = true;
+      clearTimeout(fallback);
+      document.getElementById('welcomeScreen').hidden = true;
+      var phone = document.querySelector('.phone');
+      if (phone) phone.removeAttribute('inert');
+      if (timedOut) {
+        var error = document.getElementById('loginError');
+        if (error) {
+          error.textContent = 'Загрузка занимает слишком долго. Проверьте соединение и обновите страницу.';
+          error.hidden = false;
+        }
+      }
+    }
+    var fallback = setTimeout(function () { revealLogin(true); }, 12000);
+    window.addEventListener('app-ready', function () {
+      setTimeout(function () { revealLogin(false); }, Math.max(0, 700 - (Date.now() - started)));
+    }, { once: true });
+  })();
+</script>
+<noscript><style>#welcomeScreen { display: none; }</style><p>Для входа включите JavaScript в браузере.</p></noscript>
+
+<div class="phone" inert>
 
   <!-- ===== LOGIN SCREEN ===== -->
   <section id="loginScreen" class="screen login-screen">
@@ -31,8 +67,7 @@
 
     <div class="login-hero">
       <div class="login-emoji">🎯🔥🚀</div>
-      <h1>Squad Challenge</h1>
-      <p class="login-sub">Идём к общей цели вместе — шаг за шагом</p>
+      <h1>RUNA - твой ритм, твой прогресс.</h1>
     </div>
 
     <form id="loginForm" class="login-card">
